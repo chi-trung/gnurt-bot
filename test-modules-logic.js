@@ -1,10 +1,15 @@
-// Kiểm thử logic 9 module Guardian còn lại bằng mock interaction/event.
+// Kiểm thử logic 10 module Guardian còn lại bằng mock interaction/event.
 // (suggestions đã có test riêng ở test-suggestions-logic.js)
 //
 // KHÔNG gọi Discord API. Chỉ nạp module rồi bơm dữ liệu giả vào handler,
 // kiểm tra kết quả. File data/*.json bị XOÁ trước và sau khi chạy — mọi module
 // đều load/save qua try-catch nên thiếu file = kho rỗng, không mất gì.
-// Đừng chạy khi Guardian đang chạy: sẽ mất tag/panel/rr/warn thật.
+// verify-panel.json được backup riêng vì nó trỏ tới tin nhắn THẬT trên Discord.
+//
+// ĐỪNG chạy khi Guardian đang chạy, và BACKUP src/data trước: xóa hẳn (không
+// khôi phục snapshot) là chủ đích — nếu lúc bắt đầu file đã bẩn sẵn thì restore
+// giữ lại rác cho lần chạy sau. Đã xảy ra: rr.json mất thật, không phục hồi được
+// vì .gitignore loại trừ src/data.
 const fs = require('fs');
 const path = require('path');
 
@@ -26,10 +31,11 @@ const moderation = require(path.join(GUARD, 'src/modules/moderation'));
 const reactionroles = require(path.join(GUARD, 'src/modules/reactionroles'));
 const tags = require(path.join(GUARD, 'src/modules/tags'));
 const starboard = require(path.join(GUARD, 'src/modules/starboard'));
+const levels = require(path.join(GUARD, 'src/modules/levels'));
 
 // ---------------------------------------------------------------- hạ tầng test
 const DATA_DIR = path.join(GUARD, 'src/data');
-const DATA_FILES = ['tags.json', 'rr.json', 'warns.json', 'starboard.json'];
+const DATA_FILES = ['tags.json', 'rr.json', 'warns.json', 'starboard.json', 'levels.json'];
 
 // Mỗi module đều load/save qua try-catch nên thiếu file = kho rỗng. Xoá hẳn file
 // về đúng trạng thái "chưa có" thay vì khôi phục nội dung lúc bắt đầu: nếu lúc đó
@@ -955,6 +961,401 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   check('thiếu LOG_CHANNEL_ID -> im lặng, không throw', rec.sends.length === 0);
   await require(path.join(GUARD, 'src/core/log')).sendLog({ client: { channels: { fetch: async () => { throw new Error('no access'); } } }, env: { LOG_CHANNEL_ID: '1' } }, { __t: 1 });
   check('fetch lỗi -> im lặng, không throw', true);
+
+  // ═══════════════════════════════ LEVELS ═══════════════════════════════
+  console.log('\n=== LEVELS (công thức / XP / role) ===');
+  // Module không export hàm nội bộ → nạp lại từ source, đúng convention
+  // test-suggestions-logic.js:197.
+  const lvSrc = fs.readFileSync(path.join(GUARD, 'src/modules/levels.js'), 'utf8');
+  const grab = (re) => {
+    const m = lvSrc.match(re);
+    if (!m) throw new Error('không tìm thấy: ' + re);
+    return new Function('return ' + m[0] + ';')();
+  };
+  const levelOf = grab(/function levelOf\(xp\) \{[\s\S]*?\n\}/);
+  const xpAtLevel = grab(/function xpAtLevel\(level\) \{[\s\S]*?\n\}/);
+  const rankFor = grab(/function rankFor\(roles, level\) \{[\s\S]*?\n\}/);
+  const progressBar = grab(/function progressBar\(cur, need, width\) \{[\s\S]*?\n\}/);
+
+  const RANKS = [
+    { name: 'Sắt', roleId: '1554809014708080671', emojiId: '1554806770478878720', level: 1, color: 3483428 },
+    { name: 'Đồng', roleId: '1554809009863921716', emojiId: '1554806772487688202', level: 3, color: 8343097 },
+    { name: 'Bạc', roleId: '1554809005166166087', emojiId: '1554806774463463444', level: 5, color: 4151669 },
+    { name: 'Vàng', roleId: '1554809000418222080', emojiId: '1554806776363491430', level: 8, color: 14127393 },
+    { name: 'Bạch Kim', roleId: '1554808995494105220', emojiId: '1554806778380816404', level: 12, color: 695908 },
+    { name: 'Kim Cương', roleId: '1554808990884561016', emojiId: '1554806780314255412', level: 16, color: 2107067 },
+    { name: 'Cao Thủ', roleId: '1554808985729896519', emojiId: '1554806782197502015', level: 21, color: 7870868 },
+    { name: 'Đại Cao Thủ', roleId: '1554808981011173447', emojiId: '1554806784328339456', level: 27, color: 9770808 },
+    { name: 'Thách đầu', roleId: '1554808976078536705', emojiId: '1554806786719088660', level: 34, color: 359858 },
+  ];
+  const lvCtx = {
+    ...ctxBase,
+    config: { ...ctxBase.config, levels: { xp: { message: 1, reaction: 2 }, cooldownMs: 60000, voice: { xpPer: 10, perMinutes: 5 }, roles: RANKS } },
+  };
+
+  console.log('-- công thức sqrt --');
+  check('0 XP -> level 1', levelOf(0) === 1, String(levelOf(0)));
+  check('99 XP -> level 1', levelOf(99) === 1, String(levelOf(99)));
+  check('100 XP -> level 2', levelOf(100) === 2, String(levelOf(100)));
+  check('399 XP -> level 2', levelOf(399) === 2, String(levelOf(399)));
+  check('400 XP -> level 3', levelOf(400) === 3, String(levelOf(400)));
+  check('1600 XP -> level 5', levelOf(1600) === 5, String(levelOf(1600)));
+  check('8100 XP -> level 10', levelOf(8100) === 10, String(levelOf(8100)));
+  check('36100 XP -> level 20', levelOf(36100) === 20, String(levelOf(36100)));
+  check('xp âm/NaN/str -> level 1', levelOf(-50) === 1 && levelOf(NaN) === 1 && levelOf('abc') === 1);
+  check('xpAtLevel(1)=0, (2)=100, (21)=40000', xpAtLevel(1) === 0 && xpAtLevel(2) === 100 && xpAtLevel(21) === 40000, String(xpAtLevel(21)));
+  // Mốc quan trọng: bắt lỗi off-by-one (xpAtLevel trả level^2*100 thì số này SAI)
+  check('xp đúng mốc -> đúng level (36 mốc liên tiếp)', Array.from({ length: 36 }, (_, i) => levelOf(xpAtLevel(i + 1))).every((v, i) => v === i + 1));
+
+  console.log('-- rankFor --');
+  check('level 1 -> Sắt', (rankFor(RANKS, 1) || {}).name === 'Sắt', JSON.stringify(rankFor(RANKS, 1)));
+  check('level 3 -> Đồng', (rankFor(RANKS, 3) || {}).name === 'Đồng');
+  check('level 5 -> Bạc', (rankFor(RANKS, 5) || {}).name === 'Bạc');
+  check('level 8 -> Vàng', (rankFor(RANKS, 8) || {}).name === 'Vàng');
+  check('level 12 -> Bạch Kim', (rankFor(RANKS, 12) || {}).name === 'Bạch Kim');
+  check('level 34 -> Thách đầu', (rankFor(RANKS, 34) || {}).name === 'Thách đầu');
+  check('level 99 -> vẫn Thách đầu', (rankFor(RANKS, 99) || {}).name === 'Thách đầu');
+  check('mảng roles đảo thứ tự vẫn đúng', (rankFor(RANKS.slice().reverse(), 8) || {}).name === 'Vàng');
+  check('roles rỗng -> null', rankFor([], 5) === null);
+
+  console.log('-- progressBar --');
+  check('0% -> toàn khoảng trống', progressBar(0, 100) === '`[' + '░'.repeat(14) + ']`', progressBar(0, 100));
+  check('100% -> toàn đặc', progressBar(100, 100) === '`[' + '█'.repeat(14) + ']`', progressBar(100, 100));
+  check('50% -> nửa', progressBar(50, 100) === '`[' + '█'.repeat(7) + '░'.repeat(7) + ']`', progressBar(50, 100));
+  check('need = 0 -> không NaN', !/NaN/.test(progressBar(0, 0)), progressBar(0, 0));
+
+  console.log('-- XP tin nhắn --');
+  resetData('levels.json', {});
+  const mkLvMsg = (authorId, content, over = {}) => ({
+    id: '800', guild: { id: GUILD }, content,
+    author: { id: authorId, bot: false },
+    channel: { send: async (p) => rec.sends.push(p) },
+    ...over,
+  });
+  const onLvMsg = ev(levels, 'messageCreate');
+  clearRec();
+  await onLvMsg(lvCtx, mkLvMsg('600', 'xin chào'));
+  check('tin đầu -> +1 XP', readData('levels.json')['600']?.xp === 1, JSON.stringify(readData('levels.json')['600']));
+  await onLvMsg(lvCtx, mkLvMsg('600', 'tin thứ hai ngay'));
+  check('tin sau đó -> cooldown, KHÔNG cộng', readData('levels.json')['600'].xp === 1, String(readData('levels.json')['600'].xp));
+  check('cooldown lưu lastMsg', readData('levels.json')['600'].lastMsg > 0);
+
+  clearRec();
+  await onLvMsg(lvCtx, mkLvMsg('601', 'bot nói', { author: { id: '601', bot: true } }));
+  await onLvMsg(lvCtx, mkLvMsg('602', '   '));
+  await onLvMsg(lvCtx, mkLvMsg('603', '`code block`'));
+  await onLvMsg(lvCtx, mkLvMsg('604', '> quote'));
+  await onLvMsg(lvCtx, mkLvMsg('605', 'DM', { guild: null }));
+  const lvKeys = Object.keys(readData('levels.json'));
+  check('bot / rỗng / ` / > / DM -> không tạo record', lvKeys.length === 1 && lvKeys[0] === '600', JSON.stringify(lvKeys));
+
+  console.log('-- XP reaction --');
+  const onLvReact = ev(levels, 'messageReactionAdd');
+  const mkLvReaction = (msg, over = {}) => ({ message: msg, partial: false, ...over });
+  resetData('levels.json', {});
+  clearRec();
+  await onLvReact(lvCtx, mkLvReaction(mkLvMsg('610', 'tin của tôi')), { id: '999', bot: false });
+  check('người khác thả reaction -> +2 XP cho tác giả', readData('levels.json')['610']?.xp === 2, JSON.stringify(readData('levels.json')['610']));
+  await onLvReact(lvCtx, mkLvReaction(mkLvMsg('611', 'tự thả', { author: { id: '611', bot: false } })), { id: '611', bot: false });
+  check('tự react tin mình -> không cộng', readData('levels.json')['611'] === undefined, JSON.stringify(readData('levels.json')['611']));
+  await onLvReact(lvCtx, mkLvReaction(mkLvMsg('612', 'bot thả', { author: { id: '612', bot: false } })), { id: '998', bot: true });
+  check('người bấm là bot -> không cộng', readData('levels.json')['612'] === undefined);
+  await onLvReact(lvCtx, mkLvReaction(mkLvMsg('613', 'ngoài guild', { author: { id: '613', bot: false }, guild: null })), { id: '999', bot: false });
+  check('reaction ngoài guild -> không cộng', readData('levels.json')['613'] === undefined);
+  await onLvReact(lvCtx, { message: mkLvMsg('614', 'partial', { author: { id: '614', bot: false } }), partial: true, fetch: async () => { throw new Error('Unknown Message'); } }, { id: '999', bot: false });
+  check('partial fetch lỗi -> bỏ qua, không crash', readData('levels.json')['614'] === undefined);
+
+  console.log('-- XP voice --');
+  const onLvVoice = ev(levels, 'voiceStateUpdate');
+  resetData('levels.json', {});
+  await onLvVoice(lvCtx, { id: '620', channelId: null }, { id: '620', channelId: 'VC1' });
+  check('vào voice -> ghi voiceStart', readData('levels.json')['620']?.voiceStart > 0, JSON.stringify(readData('levels.json')['620']));
+  // 5 phút = 300000ms; xpPer 10 / 5 phút -> perMs = 10/300000
+  const realNow = Date.now;
+  Date.now = () => realNow() + 5 * 60 * 1000;
+  await onLvVoice(lvCtx, { id: '620', channelId: 'VC1' }, { id: '620', channelId: null });
+  Date.now = realNow;
+  check('nghe 5 phút rồi rời -> +10 XP (không cộng đôi)', readData('levels.json')['620']?.xp === 10, String(readData('levels.json')['620']?.xp));
+  check('rời voice -> xoá voiceStart', readData('levels.json')['620'].voiceStart === 0);
+  check('rời voice -> quỹ voiceAcc về 0', readData('levels.json')['620'].voiceAcc === 0);
+  await onLvVoice(lvCtx, { id: '620', channelId: null }, { id: '620', channelId: 'VC1' });
+  const vs1 = readData('levels.json')['620'].voiceStart;
+  Date.now = () => realNow() + 60 * 1000;
+  // mute/deafen/stream: channelId KHÔNG đổi — nếu không chặn thì mất XP voice
+  await onLvVoice(lvCtx, { id: '620', channelId: 'VC1', selfMute: false }, { id: '620', channelId: 'VC1', selfMute: true });
+  Date.now = realNow;
+  check('mute (cùng kênh) -> KHÔNG reset mốc voiceStart', readData('levels.json')['620'].voiceStart === vs1, String(readData('levels.json')['620'].voiceStart));
+  check('mute -> XP không bị cộng sớm', readData('levels.json')['620'].xp === 10, String(readData('levels.json')['620'].xp));
+  await onLvVoice(lvCtx, { id: '621', channelId: 'VC1' }, { id: '621', channelId: 'VC2' });
+  check('đổi kênh -> vẫn chốt được (không mất đoạn nghe)', readData('levels.json')['621']?.voiceStart > 0, JSON.stringify(readData('levels.json')['621']));
+  check('đổi kênh chưa đủ thời gian -> +0 XP', readData('levels.json')['621']?.xp === 0, String(readData('levels.json')['621']?.xp));
+
+  console.log('-- gán/gỡ role rank --');
+  resetData('levels.json', {});
+  const roleOps = [];
+  const mkRoleMember = (id, heldRoleIds = []) => ({
+    id,
+    user: { id, bot: false },
+    roles: {
+      cache: new Collection(heldRoleIds.map((r) => [r, { id: r }])),
+      add: async (r) => roleOps.push(['add', r]),
+      remove: async (r) => roleOps.push(['rm', r]),
+    },
+  });
+  // position: Guardian ở pos 18, 9 rank role ở 1..9 -> bot cấp/gỡ được hết.
+  const mkLvGuild = (mePos = 18, held = [RANKS[0].roleId]) => {
+    const g = {
+      id: GUILD,
+      roles: { cache: new Collection(RANKS.map((r, i) => [r.roleId, { id: r.roleId, position: i + 1 }])) },
+      members: { me: { id: BOT, roles: { highest: { position: mePos } } } },
+    };
+    g.members.fetch = async (uid) =>
+      uid === 'bot-user'
+        ? { user: { bot: true }, roles: { cache: new Collection(), add: async () => {}, remove: async () => {} } }
+        : mkRoleMember(uid, held);
+    return g;
+  };
+  // Emoji thật trên server đều STATIC, tên rank_<bậc> (đối chiếu API 30/09/2026).
+  // Guard này bắt được bug hardcode `<a:rank_x:ID>` — sai prefix lẫn sai tên.
+  const EMOJI_NAME = {
+    '1554806770478878720': 'rank_sat',
+    '1554806772487688202': 'rank_dong',
+    '1554806774463463444': 'rank_bac',
+    '1554806776363491430': 'rank_vang',
+    '1554806778380816404': 'rank_bachkim',
+    '1554806780314255412': 'rank_kimcuong',
+    '1554806782197502015': 'rank_caothu',
+    '1554806784328339456': 'rank_daicaothu',
+    '1554806786719088660': 'rank_thachdau',
+  };
+  const mkEmojiCache = (animatedIds = []) =>
+    new Collection(
+      RANKS.map((r) => [
+        r.emojiId,
+        { id: r.emojiId, name: EMOJI_NAME[r.emojiId], animated: animatedIds.includes(r.emojiId) },
+      ])
+    );
+  const mkLvClient = (guild, emojiCache) => {
+    if (guild && !guild.emojis) {
+      const cache = emojiCache || mkEmojiCache();
+      guild.emojis = { cache, fetch: async () => cache };
+    }
+    return { channels: { fetch: async () => fakeChannel }, guilds: { cache: new Collection(guild ? [[GUILD, guild]] : []) } };
+  };
+  const lvRoleCtx = { ...lvCtx, client: mkLvClient(mkLvGuild()) };
+
+  roleOps.length = 0;
+  await onLvMsg(lvRoleCtx, mkLvMsg('630', 'a'));
+  check('chưa đổi level (vẫn Lv1) -> không động role', roleOps.length === 0, JSON.stringify(roleOps));
+
+  // 99 -> 100: lên level 2, bậc vẫn Sắt -> gán Sắt cho member chưa có role nào
+  roleOps.length = 0;
+  clearRec();
+  resetData('levels.json', { '631': { xp: 99, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  const noRoleCtx = { ...lvRoleCtx, client: mkLvClient(mkLvGuild(18, [])) };
+  await onLvMsg(noRoleCtx, mkLvMsg('631', 'x'));
+  check('lên level 2 -> gán Sắt', roleOps.some((o) => o[0] === 'add' && o[1] === RANKS[0].roleId), JSON.stringify(roleOps));
+  check('gán bậc mới -> KHÔNG gỡ chính bậc đó', !roleOps.some((o) => o[0] === 'rm' && o[1] === RANKS[0].roleId), JSON.stringify(roleOps));
+  check('lên level -> XP cộng đúng 1', readData('levels.json')['631'].xp === 100, String(readData('levels.json')['631'].xp));
+  check('lên level -> thông báo trong kênh', rec.sends.some((s) => typeof s === 'string' && /Level 2/.test(s)), JSON.stringify(rec.sends));
+
+  // 399 -> 400: lên level 3 -> bậc Đồng: gỡ Sắt, gán Đồng
+  roleOps.length = 0;
+  clearRec();
+  resetData('levels.json', { '632': { xp: 399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg(lvRoleCtx, mkLvMsg('632', 'x'));
+  check('lên level 3 -> gỡ Sắt', roleOps.some((o) => o[0] === 'rm' && o[1] === RANKS[0].roleId), JSON.stringify(roleOps));
+  check('lên level 3 -> gán Đồng', roleOps.some((o) => o[0] === 'add' && o[1] === RANKS[1].roleId), JSON.stringify(roleOps));
+  check('lên level 3 -> báo Level 3', rec.sends.some((s) => typeof s === 'string' && /Level 3/.test(s)), JSON.stringify(rec.sends));
+
+  // Role đích cao hơn bot -> KHÔNG cấp được, nhưng role cũ thấp hơn vẫn gỡ được.
+  // mePos = 3: Sắt (pos 1) + Đồng (pos 2) quản lý được; Đại Cao Thủ (pos 8) thì không.
+  // 102399 -> level 32; +1 = 102400 -> level 33 (mốc chuyển level thật).
+  roleOps.length = 0;
+  resetData('levels.json', { '633': { xp: 102399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg({ ...lvRoleCtx, client: mkLvClient(mkLvGuild(3)) }, mkLvMsg('633', 'x'));
+  check('role đích cao hơn bot -> KHÔNG cấp',
+    !roleOps.some((o) => o[0] === 'add' && o[1] === RANKS[7].roleId), JSON.stringify(roleOps));
+  check('role cũ thấp hơn bot -> vẫn gỡ được',
+    roleOps.some((o) => o[0] === 'rm' && o[1] === RANKS[0].roleId), JSON.stringify(roleOps));
+  check('vẫn cộng XP', readData('levels.json')['633'].xp === 102400, String(readData('levels.json')['633'].xp));
+
+  // toàn bộ role rank nằm >= cao nhất bot -> không động role gì, không throw
+  roleOps.length = 0;
+  resetData('levels.json', { '633b': { xp: 399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg({ ...lvRoleCtx, client: mkLvClient(mkLvGuild(0)) }, mkLvMsg('633b', 'x'));
+  check('mọi role rank đều cao hơn bot -> không động role, không crash',
+    roleOps.length === 0 && readData('levels.json')['633b'].xp === 400, JSON.stringify(roleOps));
+
+  // Member là bot -> không gán role
+  roleOps.length = 0;
+  resetData('levels.json', { 'bot-user': { xp: 399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg(lvRoleCtx, mkLvMsg('bot-user', 'x'));
+  check('member là bot -> không động role', roleOps.length === 0, JSON.stringify(roleOps));
+
+  // Không có guild trong cache -> không crash
+  resetData('levels.json', { '634': { xp: 399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg({ ...lvRoleCtx, client: mkLvClient(null) }, mkLvMsg('634', 'x'));
+  check('không có guild -> không crash', readData('levels.json')['634'].xp === 400, String(readData('levels.json')['634'].xp));
+
+  // member.roles.add ném lỗi -> không làm hỏng phần XP
+  roleOps.length = 0;
+  resetData('levels.json', { '635': { xp: 399, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  const throwGuild = mkLvGuild();
+  throwGuild.members.fetch = async () => ({ user: { bot: false }, roles: { cache: new Collection(), add: async () => { throw new Error('Missing Permissions'); }, remove: async () => {} } });
+  await onLvMsg({ ...lvRoleCtx, client: mkLvClient(throwGuild) }, mkLvMsg('635', 'x'));
+  check('gán role lỗi -> XP vẫn đã cộng', readData('levels.json')['635'].xp === 400, String(readData('levels.json')['635'].xp));
+
+  console.log('-- /level --');
+  // /level và /leaderboard cần guild có emojis.cache để rankTag() render được icon.
+  const lvEmojiCtx = { ...lvCtx, client: mkLvClient(mkLvGuild()) };
+  resetData('levels.json', {});
+  clearRec();
+  const lvUser = { id: '700', username: 'Tester', displayAvatarURL: () => 'https://x/a.png' };
+  let li = sub('level', 'level', {}, { user: lvUser });
+  li.i.options.getUser = () => null;
+  check('/level -> true', (await levels.handleInteraction(li.i, lvEmojiCtx)) === true);
+  check('/level ephemeral', li.captured?.flags === MessageFlags.Ephemeral, JSON.stringify(li.captured?.flags));
+  check('0 XP -> Level 1', (emb(li.captured).author?.name || '').includes('Level 1'), emb(li.captured).author?.name);
+  check('0 XP -> bậc Sắt', /Sắt/.test(emb(li.captured).description || ''), emb(li.captured).description);
+  check('màu embed theo bậc', emb(li.captured).color === 3483428, String(emb(li.captured).color));
+  check('có progress bar', /█|░/.test(emb(li.captured).description || ''), emb(li.captured).description);
+
+  resetData('levels.json', { '701': { xp: 1600, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  clearRec();
+  const hiUser = { id: '701', username: 'High', displayAvatarURL: () => 'https://x/a.png' };
+  li = sub('level', 'level', {}, { user: hiUser });
+  li.i.options.getUser = () => hiUser;
+  await levels.handleInteraction(li.i, lvEmojiCtx);
+  const desc701 = emb(li.captured).description;
+  check('1600 XP -> Level 5', (emb(li.captured).author?.name || '').includes('Level 5'), emb(li.captured).author?.name);
+  check('1600 XP -> bậc Bạc', /\bBạc\b/.test(desc701), desc701);
+  // 1600 - xpAtLevel(5)=1600 -> cur 0; xpAtLevel(6)=2500 -> need 900
+  check('Level 5 -> 0 / 900 XP (off-by-one)', /\b0 \/ 900 XP\b/.test(desc701), desc701);
+  check('Level 5 -> tổng XP 1600', /Tổng XP: \*\*1600\*\*/.test(desc701), desc701);
+  check('footer Level 5 → 6', (emb(li.captured).footer?.text || '').includes('Level 5 → 6'), emb(li.captured).footer?.text);
+  // Emoji Bạc là STATIC tên rank_bac -> markup phải <:rank_bac:ID>.
+  // Hardcode `<a:rank_x:ID>` khiến Discord không render, hiện raw text.
+  check(
+    'nhúng emoji rank đúng markup static <:ten:id>',
+    desc701.includes(`<:rank_bac:${RANKS[2].emojiId}>`),
+    desc701
+  );
+  check('KHÔNG dùng prefix <a:> cho emoji static', !/<a:/.test(desc701), desc701);
+  check('KHÔNG hardcode tên rank_x', !/rank_x/.test(desc701), desc701);
+
+  // Emoji animated phải ra <a:ten:id> — nhánh này test cũ không chạm tới.
+  resetData('levels.json', { '702': { xp: 1600, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  clearRec();
+  const animCtx = { ...lvCtx, client: mkLvClient(mkLvGuild(), mkEmojiCache([RANKS[2].emojiId])) };
+  const animUser = { id: '702', username: 'Anim', displayAvatarURL: () => 'https://x/a.png' };
+  li = sub('level', 'level', {}, { user: animUser });
+  li.i.options.getUser = () => animUser;
+  await levels.handleInteraction(li.i, animCtx);
+  const desc702 = emb(li.captured).description;
+  check('emoji animated -> markup <a:ten:id>', desc702.includes(`<a:rank_bac:${RANKS[2].emojiId}>`), desc702);
+
+  // Cache thiếu emoji -> fallback unicode, không crash.
+  resetData('levels.json', { '703': { xp: 1600, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  clearRec();
+  const noEmojiCtx = { ...lvCtx, client: mkLvClient(mkLvGuild(), new Collection()) };
+  const noEmojiUser = { id: '703', username: 'NoEmoji', displayAvatarURL: () => 'https://x/a.png' };
+  li = sub('level', 'level', {}, { user: noEmojiUser });
+  li.i.options.getUser = () => noEmojiUser;
+  check('emoji không có trong cache -> fallback 🏅, không crash', (await levels.handleInteraction(li.i, noEmojiCtx)) === true && /🏅/.test(emb(li.captured).description || ''), emb(li.captured).description);
+
+  // Không có guild trong cache -> fallback, không crash.
+  resetData('levels.json', { '704': { xp: 1600, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  clearRec();
+  const noGuildUser = { id: '704', username: 'NoGuild', displayAvatarURL: () => 'https://x/a.png' };
+  li = sub('level', 'level', {}, { user: noGuildUser });
+  li.i.options.getUser = () => noGuildUser;
+  check('không có guild -> fallback 🏅, không crash', (await levels.handleInteraction(li.i, lvCtx)) === true && /🏅/.test(emb(li.captured).description || ''), emb(li.captured).description);
+
+  console.log('-- /leaderboard --');
+  resetData('levels.json', {});
+  clearRec();
+  li = sub('leaderboard', 'leaderboard', {});
+  check('/leaderboard -> true', (await levels.handleInteraction(li.i, lvEmojiCtx)) === true);
+  check('chưa ai có XP -> báo riêng', /Chưa có ai/.test(li.captured?.content || ''), li.captured?.content);
+
+  resetData('levels.json', {
+    '801': { xp: 1600, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 },
+    '802': { xp: 36100, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 },
+    '803': { xp: 100, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceStart: 0, voiceAcc: 0 },
+    '804': { xp: 0, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 },
+  });
+  clearRec();
+  li = sub('leaderboard', 'leaderboard', {});
+  await levels.handleInteraction(li.i, lvEmojiCtx);
+  const lb = emb(li.captured);
+  const lbLines = (lb.description || '').split('\n');
+  check('tiêu đề bảng', lb.title === '🏆 Bảng xếp hạng level', lb.title);
+  check('bỏ user 0 XP', !lbLines.some((l) => l.includes('<@804>')), lb.description);
+  check('3 dòng (top 3)', lbLines.length === 3, String(lbLines.length));
+  check('🥇 cho người nhiều XP nhất', lbLines[0].startsWith('🥇 <@802>'), lbLines[0]);
+  check('🥈 cho người thứ nhì', lbLines[1].startsWith('🥈 <@801>'), lbLines[1]);
+  check('🥉 cho người thứ ba', lbLines[2].startsWith('🥉 <@803>'), lbLines[2]);
+  check('dòng có level + XP', /Lv \*\*20\*\* · \*\*36100\*\* XP/.test(lbLines[0]), lbLines[0]);
+  check('bảng KHÔNG ephemeral (ai cũng xem được)', li.captured?.flags === undefined, JSON.stringify(li.captured?.flags));
+  // 36100 XP -> Lv 20 -> Kim Cương (level 16); 1600 -> Bạc (5); 100 -> Đồng (3).
+  check('bảng nhúng icon rank markup đúng', lbLines[0].includes(`<:rank_kimcuong:${RANKS[5].emojiId}>`), lbLines[0]);
+  check('bảng KHÔNG dùng <a:> cho emoji static', !/<a:/.test(lb.description || ''), lb.description);
+
+  // /leaderboard phải chốt XP voice của người còn đang trong kênh
+  resetData('levels.json', { '805': { xp: 0, lastMsg: 0, lastReact: 0, voiceStart: realNow() - 5 * 60 * 1000, voiceAcc: 0 } });
+  clearRec();
+  li = sub('leaderboard', 'leaderboard', {});
+  await levels.handleInteraction(li.i, lvEmojiCtx);
+  check('/leaderboard chốt XP voice đang dở', readData('levels.json')['805'].xp === 10, String(readData('levels.json')['805'].xp));
+  check('sau khi chốt -> voiceAcc về 0, voiceStart giữ mốc mới', readData('levels.json')['805'].voiceAcc === 0 && readData('levels.json')['805'].voiceStart > 0, JSON.stringify(readData('levels.json')['805']));
+
+  console.log('-- guard --');
+  li = sub('tag', 'list', {});
+  check('lệnh module khác -> false', (await levels.handleInteraction(li.i, lvCtx)) === false);
+  li = mkIface({ isChatInputCommand: () => false, commandName: 'level' });
+  check('không phải chat input -> false', (await levels.handleInteraction(li.i, lvCtx)) === false);
+  const noRankCtx = { ...lvCtx, config: { ...lvCtx.config, levels: { ...lvCtx.config.levels, roles: [] } } };
+  clearRec();
+  li = sub('level', 'level', {}, { user: lvUser });
+  li.i.options.getUser = () => null;
+  check('config.levels.roles rỗng -> vẫn trả lệnh, báo chưa có bậc', (await levels.handleInteraction(li.i, noRankCtx)) === true && /chưa có bậc nào/.test(emb(li.captured).description || ''), emb(li.captured).description);
+
+  console.log('-- init --');
+  // init() phải nạp emoji qua REST: gateway KHÔNG gửi emoji trong GUILD_CREATE
+  // nên cache rỗng lúc khởi động, rankTag() sẽ mất icon nếu không nạp trước.
+  const emojiFetchCalls = [];
+  const emojiGuild = mkLvGuild();
+  emojiGuild.emojis = {
+    cache: new Collection(),
+    fetch: async () => {
+      emojiFetchCalls.push('fetch');
+      for (const [id, e] of mkEmojiCache()) emojiGuild.emojis.cache.set(id, e);
+      return emojiGuild.emojis.cache;
+    },
+  };
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(emojiGuild) });
+  check('init gọi guild.emojis.fetch()', emojiFetchCalls.length === 1, JSON.stringify(emojiFetchCalls));
+  check('sau init thì emoji có trong cache', emojiGuild.emojis.cache.size === RANKS.length, String(emojiGuild.emojis.cache.size));
+
+  await levels.init(lvRoleCtx);
+  check('init role hợp lệ -> không throw', true);
+
+  // emojis.fetch() lỗi -> init vẫn chạy tiếp, chỉ warn (không chặn phần role).
+  const throwEmojiGuild = mkLvGuild();
+  throwEmojiGuild.emojis = {
+    cache: new Collection(),
+    fetch: async () => {
+      throw new Error('Missing Access');
+    },
+  };
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(throwEmojiGuild) });
+  check('emojis.fetch lỗi -> init không throw', true);
+
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(null) });
+  check('init không có guild -> không throw', true);
+  await levels.init(noRankCtx);
+  check('init roles rỗng -> không throw', true);
 
   console.log(`\n${'='.repeat(46)}\nPASS: ${pass}   FAIL: ${fail}\n`);
   restore();

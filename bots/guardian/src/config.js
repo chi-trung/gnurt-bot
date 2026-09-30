@@ -14,6 +14,7 @@ const DEFAULTS = {
     tags: true,
     starboard: true,
     suggestions: true,
+    levels: true,
   },
   automod: {
     invites: true,
@@ -22,6 +23,14 @@ const DEFAULTS = {
     mentions: { max: 6 },
   },
   starboard: { threshold: 3, emoji: '⭐' },
+  levels: {
+    xp: { message: 1, reaction: 2 },
+    cooldownMs: 60000,
+    voice: { xpPer: 10, perMinutes: 5 },
+    // Thang rank LoL (đã bỏ Lục bảo) — level tối thiểu để nhận role.
+    // roleId/emojiId ghi đè trong config.json sau khi tạo trên server.
+    roles: [],
+  },
 };
 
 function deepMerge(base, override) {

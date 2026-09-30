@@ -46,6 +46,7 @@ const MODULE_PATHS = [
   './modules/tags',
   './modules/starboard',
   './modules/suggestions',
+  './modules/levels',
 ];
 const loaded = [];
 for (const p of MODULE_PATHS) {
@@ -74,6 +75,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent, // cần bật MESSAGE CONTENT INTENT ở Portal
     GatewayIntentBits.GuildMessageReactions, // reaction-roles
+    GatewayIntentBits.GuildVoiceStates, // levels: XP theo thời gian nghe voice
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction], // reaction/message không cache vẫn xử lý được
 });
