@@ -1,25 +1,8 @@
 // Starboard: tin được >= ngưỡng reaction ⭐ → embed vào kênh starboard, tự update số.
 // Cấu hình: config.json → starboard { threshold, emoji }; STARBOARD_CHANNEL_ID ở .env.
-// Storage: src/data/starboard.json { [tin gốc]: [tin starboard] }.
-const fs = require('fs');
-const path = require('path');
+// Storage: core/store → data/guilds/<guildId>/starboard.json { [tin gốc]: [tin starboard] }.
 const { Events, EmbedBuilder } = require('discord.js');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const SB_FILE = path.join(DATA_DIR, 'starboard.json');
-
-function loadMap() {
-  try {
-    const j = JSON.parse(fs.readFileSync(SB_FILE, 'utf8'));
-    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
-  } catch {
-    return {};
-  }
-}
-function saveMap(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(SB_FILE, JSON.stringify(data, null, 2));
-}
+const store = require('../core/store');
 
 /** So khớp emoji: config '⭐' → so với name; '<:ten:123>' / 'ten:123' → so name:id. */
 function emojiMatches(configEmoji, emoji) {
@@ -49,19 +32,22 @@ function buildEmbed(msg, count, channelName) {
 
 /** Đưa tin vào starboard (hoặc update nếu đã có). */
 async function postOrUpdate(ctx, reaction) {
-  const c = ctx.config.starboard;
-  const channelId = ctx.env.STARBOARD_CHANNEL_ID;
-  if (!channelId) return;
-
   const msg = reaction.message;
   if (!msg.guild || msg.author?.bot) return;
+
+  // Cấu hình theo guild: mỗi server một kênh starboard riêng. Đọc SAU khi
+  // check `msg.guild` vì `ctx.cfg(undefined)` trả shape rỗng.
+  const c = ctx.cfg(msg.guildId).starboard;
+  const channelId = ctx.cfg(msg.guildId).channels.starboard;
+  if (!channelId) return;
+
   if (msg.channel.id === channelId) return;
   if (!emojiMatches(c.emoji, reaction.emoji)) return;
   if (reaction.count < c.threshold) return;
 
   try {
     const sbChannel = await ctx.client.channels.fetch(channelId);
-    const map = loadMap();
+    const map = store.read(msg.guildId, 'starboard');
     const existingId = map[msg.id];
     const embed = buildEmbed(msg, reaction.count, msg.channel.name);
 
@@ -76,8 +62,9 @@ async function postOrUpdate(ctx, reaction) {
     }
 
     const sbMsg = await sbChannel.send({ embeds: [embed] });
-    map[msg.id] = sbMsg.id;
-    saveMap(map);
+    await store.updateAsync(msg.guildId, 'starboard', (m) => {
+      m[msg.id] = sbMsg.id;
+    });
   } catch (err) {
     console.error('Starboard lỗi:', err.message);
   }
@@ -85,17 +72,23 @@ async function postOrUpdate(ctx, reaction) {
 
 /** Update số sao khi bỏ reaction (không xóa bài — chỉ cập nhật count). */
 async function updateCount(ctx, reaction) {
-  const c = ctx.config.starboard;
-  if (!emojiMatches(c.emoji, reaction.emoji)) return;
   const msg = reaction.message;
   if (!msg.guild) return;
 
-  const map = loadMap();
-  const existingId = map[msg.id];
+  // Đọc SAU khi check `msg.guild` — `ctx.cfg(undefined)` trả shape rỗng.
+  const c = ctx.cfg(msg.guildId).starboard;
+  if (!emojiMatches(c.emoji, reaction.emoji)) return;
+
+  // Không có kênh starboard thì không có gì để cập nhật — `channels.fetch(undefined)`
+  // throw TypeError, chỉ chết trong try/catch nên im lắng mất dấu.
+  const channelId = ctx.cfg(msg.guildId).channels.starboard;
+  if (!channelId) return;
+
+  const existingId = store.read(msg.guildId, 'starboard')[msg.id];
   if (!existingId) return; // chưa từng lên starboard → bỏ qua
 
   try {
-    const sbChannel = await ctx.client.channels.fetch(ctx.env.STARBOARD_CHANNEL_ID);
+    const sbChannel = await ctx.client.channels.fetch(channelId);
     const sbMsg = await sbChannel.messages.fetch(existingId);
     const count = reaction.count ?? 0;
     const embed = buildEmbed(msg, count, msg.channel.name);

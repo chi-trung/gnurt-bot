@@ -11,18 +11,24 @@ const { sendLog } = require('../core/log');
 const INVITE_RE = /\bhttps?:\/\/(?:www\.)?discord\.(?:gg|io|me)\/\S+|\bhttps?:\/\/(?:www\.)?discord(?:app)?\.com\/invite\/\S+/i;
 
 // strike counting (in-memory, reset khi bot restart)
-const strikes = new Map(); // userId -> count
-const spamWindows = new Map(); // userId -> [timestamps]
+// Khoá theo `${guildId}:${userId}` — bản single-guild khoá `userId` nên cùng
+// một người bị strike ở server A thì sang server B lần đầu đã có sẵn strike.
+const strikes = new Map();
+const spamWindows = new Map();
 
-function bumpStrike(userId) {
-  const n = (strikes.get(userId) || 0) + 1;
-  strikes.set(userId, n);
+const ukey = (guildId, userId) => `${guildId}:${userId}`;
+
+function bumpStrike(guildId, userId) {
+  const k = ukey(guildId, userId);
+  const n = (strikes.get(k) || 0) + 1;
+  strikes.set(k, n);
   return n;
 }
 
 async function penalize(msg, ctx, reason, description) {
   const cfg = ctx.config.automod;
-  const strike = bumpStrike(msg.author.id);
+  const key = ukey(msg.guildId, msg.author.id);
+  const strike = bumpStrike(msg.guildId, msg.author.id);
 
   try {
     await msg.delete();
@@ -36,7 +42,7 @@ async function penalize(msg, ctx, reason, description) {
     try {
       await msg.member.timeout(cfg.spam.timeoutSeconds * 1000, `Automod: ${reason}`);
       timedOut = true;
-      strikes.set(msg.author.id, 0);
+      strikes.set(key, 0);
     } catch (err) {
       console.error('Automod không timeout được:', err.message);
     }
@@ -54,6 +60,7 @@ async function penalize(msg, ctx, reason, description) {
 
   await sendLog(
     ctx,
+    msg.guildId,
     new EmbedBuilder()
       .setColor(timedOut ? 0xe74c3c : 0xe67e22)
       .setTitle('🛡️ Auto-mod')
@@ -101,11 +108,12 @@ module.exports = {
 
         // 4. Spam (rate)
         const now = Date.now();
-        const win = (spamWindows.get(msg.author.id) || []).filter((t) => now - t < cfg.spam.windowMs);
+        const key = ukey(msg.guildId, msg.author.id);
+        const win = (spamWindows.get(key) || []).filter((t) => now - t < cfg.spam.windowMs);
         win.push(now);
-        spamWindows.set(msg.author.id, win);
+        spamWindows.set(key, win);
         if (win.length > cfg.spam.messages) {
-          spamWindows.set(msg.author.id, []);
+          spamWindows.set(key, []);
           await penalize(msg, ctx, 'spam', `${win.length} tin trong ${cfg.spam.windowMs}ms.`);
         }
       },

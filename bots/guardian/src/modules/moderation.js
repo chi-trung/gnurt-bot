@@ -1,8 +1,8 @@
 // Lệnh quản trị: /kick /ban /timeout /warn — mặc định ẩn với user không đủ quyền
 // (Discord default_member_permissions), đồng thời check lại phía server.
-// Warn lưu ở data/warns.json.
-const fs = require('fs');
-const path = require('path');
+// Warn lưu ở core/store → data/guilds/<guildId>/warns.json, khoá theo userId.
+// Bản single-guild để file phẳng: cùng một người bị warn 3 lần ở server A thì
+// sang server B lệnh /warn báo "tổng 3" dù chưa ai bị warn lần nào.
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -10,21 +10,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const WARNS_FILE = path.join(DATA_DIR, 'warns.json');
-
-function loadWarns() {
-  try {
-    return JSON.parse(fs.readFileSync(WARNS_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-function saveWarns(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(WARNS_FILE, JSON.stringify(data, null, 2));
-}
+const store = require('../core/store');
 
 const kickCmd = new SlashCommandBuilder()
   .setName('kick')
@@ -93,11 +79,11 @@ async function handleInteraction(interaction, ctx) {
       }
       await target.kick(reason);
       await interaction.editReply(`✅ Đã kick ${targetUser}.\nLý do: ${reason}`);
-      await logAction(ctx, '👢 Kick', 0xe67e22, interaction.user, targetUser, reason);
+      await logAction(ctx, interaction.guildId, '👢 Kick', 0xe67e22, interaction.user, targetUser, reason);
     } else if (name === 'ban') {
       await guild.members.ban(targetUser.id, { reason });
       await interaction.editReply(`✅ Đã ban ${targetUser}.\nLý do: ${reason}`);
-      await logAction(ctx, '🔨 Ban', 0xe74c3c, interaction.user, targetUser, reason);
+      await logAction(ctx, interaction.guildId, '🔨 Ban', 0xe74c3c, interaction.user, targetUser, reason);
     } else if (name === 'timeout') {
       if (!target.timeout) {
         await interaction.editReply('Không tìm thấy thành viên trong server.');
@@ -106,21 +92,38 @@ async function handleInteraction(interaction, ctx) {
       const minutes = interaction.options.getInteger('minutes');
       await target.timeout(minutes * 60_000, reason);
       await interaction.editReply(`✅ Đã timeout ${targetUser} **${minutes} phút**.\nLý do: ${reason}`);
-      await logAction(ctx, '🔇 Timeout', 0x9b59b6, interaction.user, targetUser, `${reason} (${minutes} phút)`);
+      await logAction(
+        ctx,
+        interaction.guildId,
+        '🔇 Timeout',
+        0x9b59b6,
+        interaction.user,
+        targetUser,
+        `${reason} (${minutes} phút)`
+      );
     } else if (name === 'warn') {
-      const warns = loadWarns();
-      const list = warns[targetUser.id] || [];
-      list.push({ reason, by: interaction.user.id, at: new Date().toISOString() });
-      warns[targetUser.id] = list;
-      saveWarns(warns);
+      const total = await store.updateAsync(interaction.guildId, 'warns', (warns) => {
+        const list = warns[targetUser.id] || [];
+        list.push({ reason, by: interaction.user.id, at: new Date().toISOString() });
+        warns[targetUser.id] = list;
+        return list.length;
+      });
 
-      await interaction.editReply(`⚠️ Đã warn ${targetUser} (tổng **${list.length}** warn).\nLý do: ${reason}`);
+      await interaction.editReply(`⚠️ Đã warn ${targetUser} (tổng **${total}** warn).\nLý do: ${reason}`);
       try {
-        await targetUser.send(`⚠️ Bạn bị warn trong **${guild.name}** (tổng ${list.length}).\nLý do: ${reason}`);
+        await targetUser.send(`⚠️ Bạn bị warn trong **${guild.name}** (tổng ${total}).\nLý do: ${reason}`);
       } catch {
         /* user chặn DM — bỏ qua */
       }
-      await logAction(ctx, '⚠️ Warn', 0xf1c40f, interaction.user, targetUser, `${reason} (tổng ${list.length})`);
+      await logAction(
+        ctx,
+        interaction.guildId,
+        '⚠️ Warn',
+        0xf1c40f,
+        interaction.user,
+        targetUser,
+        `${reason} (tổng ${total})`
+      );
     }
   } catch (err) {
     console.error(`Lỗi lệnh ${name}:`, err.message);
@@ -129,9 +132,10 @@ async function handleInteraction(interaction, ctx) {
   return true;
 }
 
-async function logAction(ctx, title, color, moderator, targetUser, reason) {
+async function logAction(ctx, guildId, title, color, moderator, targetUser, reason) {
   await sendLog(
     ctx,
+    guildId,
     new EmbedBuilder()
       .setColor(color)
       .setTitle(title)

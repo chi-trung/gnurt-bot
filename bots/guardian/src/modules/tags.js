@@ -1,8 +1,8 @@
 // Tags: trả lời nhanh bằng nội dung đã lưu — /tag create|delete|list|show.
-// Storage: src/data/tags.json { name: content }.
+// Storage: core/store → data/guilds/<guildId>/tags.json { name: content }.
+// Mỗi server một namespace tag riêng: tag `rules` của server này không tự động
+// xuất hiện ở server khác.
 // Root /tag visible cho mọi người; create/delete check ManageGuild trong code.
-const fs = require('fs');
-const path = require('path');
 const {
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -10,22 +10,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const TAGS_FILE = path.join(DATA_DIR, 'tags.json');
-
-function loadTags() {
-  try {
-    const j = JSON.parse(fs.readFileSync(TAGS_FILE, 'utf8'));
-    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
-  } catch {
-    return {};
-  }
-}
-function saveTags(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(TAGS_FILE, JSON.stringify(data, null, 2));
-}
+const store = require('../core/store');
 
 const NAME_RE = /^[a-z0-9\-]{1,50}$/;
 
@@ -60,11 +45,13 @@ function canManage(interaction) {
 }
 
 async function handleInteraction(interaction, ctx) {
+  const guildId = interaction.guildId;
+
   // autocomplete cho tên tag
   if (interaction.isAutocomplete()) {
     if (interaction.commandName !== 'tag') return false;
     const focused = interaction.options.getFocused().toLowerCase();
-    const names = Object.keys(loadTags())
+    const names = Object.keys(store.read(guildId, 'tags'))
       .filter((n) => n.startsWith(focused))
       .slice(0, 25)
       .map((n) => ({ name: n, value: n }));
@@ -75,7 +62,7 @@ async function handleInteraction(interaction, ctx) {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'tag') return false;
 
   const sub = interaction.options.getSubcommand();
-  const tags = loadTags();
+  const tags = store.read(guildId, 'tags');
 
   if (sub === 'list') {
     const names = Object.keys(tags);
@@ -135,11 +122,13 @@ async function handleInteraction(interaction, ctx) {
       await interaction.reply({ content: `Tag \`${name}\` đã tồn tại — dùng \`/tag delete\` trước nếu muốn thay.`, flags: MessageFlags.Ephemeral });
       return true;
     }
-    tags[name] = content;
-    saveTags(tags);
+    await store.updateAsync(guildId, 'tags', (t) => {
+      t[name] = content;
+    });
     await interaction.reply({ content: `✅ Đã tạo tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
     await sendLog(
       ctx,
+      guildId,
       new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('🏷️ Tag mới')
@@ -154,11 +143,13 @@ async function handleInteraction(interaction, ctx) {
       await interaction.reply({ content: `Không có tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
       return true;
     }
-    delete tags[name];
-    saveTags(tags);
+    await store.updateAsync(guildId, 'tags', (t) => {
+      delete t[name];
+    });
     await interaction.reply({ content: `🗑️ Đã xóa tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
     await sendLog(
       ctx,
+      guildId,
       new EmbedBuilder()
         .setColor(0xe74c3c)
         .setTitle('🏷️ Tag bị xóa')

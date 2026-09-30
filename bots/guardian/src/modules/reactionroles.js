@@ -1,24 +1,7 @@
 // Reaction-roles: /rr create đăng panel "bấm emoji nhận role", /rr delete gỡ panel.
-// Lưu ở src/data/rr.json — bot restart vẫn nhớ panel.
-const fs = require('fs');
-const path = require('path');
+// Lưu ở core/store → data/guilds/<guildId>/rr.json (mảng) — bot restart vẫn nhớ panel.
 const { Events, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, MessageFlags } = require('discord.js');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const RR_FILE = path.join(DATA_DIR, 'rr.json');
-
-function loadPairs() {
-  try {
-    const j = JSON.parse(fs.readFileSync(RR_FILE, 'utf8'));
-    return Array.isArray(j) ? j : [];
-  } catch {
-    return [];
-  }
-}
-function savePairs(list) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(RR_FILE, JSON.stringify(list, null, 2));
-}
+const store = require('../core/store');
 
 /** '👍' → '👍', '<:ten:123>' / 'ten:123' → 'ten:123' (định dạng msg.react). */
 function parseEmoji(input) {
@@ -80,9 +63,9 @@ async function handleInteraction(interaction, ctx) {
       });
       await msg.react(emojiInput);
 
-      const list = loadPairs();
-      list.push({ channelId: msg.channelId, messageId: msg.id, emoji: emojiInput, roleId: role.id });
-      savePairs(list);
+      await store.updateAsync(interaction.guildId, 'rr', (list) => {
+        list.push({ channelId: msg.channelId, messageId: msg.id, emoji: emojiInput, roleId: role.id });
+      });
 
       await interaction.editReply(`✅ Đã tạo panel tại ${channel} — ${emojiInput} → ${role}`);
     } catch (err) {
@@ -94,27 +77,34 @@ async function handleInteraction(interaction, ctx) {
 
   if (sub === 'delete') {
     const link = interaction.options.getString('link');
-    const m = link.match(/channels\/\d+\/(\d+)\/(\d+)/);
+    const m = link.match(/channels\/(\d+)\/(\d+)\/(\d+)/);
     if (!m) {
       await interaction.editReply('Link không hợp lệ — chuột phải tin nhắn → Copy Message Link.');
       return true;
     }
-    const messageId = m[2];
-    const list = loadPairs();
-    const idx = list.findIndex((p) => p.messageId === messageId);
-    if (idx === -1) {
+    // Dán link panel của server khác: m2 (channelId) đã thuộc server đó nên
+    // `channels.fetch` sẽ trả về kênh server khác — bot gỡ nhầm panel bên đó.
+    if (m[1] !== interaction.guildId) {
+      await interaction.editReply('Link đó trỏ sang server khác — chỉ xoá được panel trong server này.');
+      return true;
+    }
+    const messageId = m[3];
+    const pair = store.read(interaction.guildId, 'rr').find((p) => p.messageId === messageId);
+    if (!pair) {
       await interaction.editReply('Không tìm thấy panel nào có id đó (hoặc đã xóa trước đó).');
       return true;
     }
     try {
-      const ch = await ctx.client.channels.fetch(list[idx].channelId);
+      const ch = await ctx.client.channels.fetch(pair.channelId);
       const msg = await ch.messages.fetch(messageId);
       await msg.delete();
     } catch {
       /* tin có thể đã bị xóa — vẫn gỡ record */
     }
-    list.splice(idx, 1);
-    savePairs(list);
+    await store.updateAsync(interaction.guildId, 'rr', (list) => {
+      const idx = list.findIndex((p) => p.messageId === messageId);
+      if (idx !== -1) list.splice(idx, 1);
+    });
     await interaction.editReply('🗑️ Đã xóa panel reaction-role.');
     return true;
   }
@@ -127,7 +117,10 @@ async function grantOrRevoke(reaction, userId, add) {
   if (!message.guild) return;
   const key = emojiKey(reaction.emoji);
 
-  const pair = loadPairs().find((p) => p.messageId === message.id && p.emoji === key);
+  // Chỉ tra trong `rr` của đúng guild này.
+  const pair = store
+    .read(message.guild.id, 'rr')
+    .find((p) => p.messageId === message.id && p.emoji === key);
   if (!pair) return;
 
   try {

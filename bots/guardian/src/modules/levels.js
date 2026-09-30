@@ -1,26 +1,15 @@
 // Levels: XP theo tin nhắn / reaction / thời gian nghe voice → level → role rank (thang LoL).
 // Công thức sqrt (chậm rồi nhanh): level = floor(sqrt(xp / 100)) + 1
 // Cấu hình: config.json → levels { xp, cooldownMs, voice, roles[] }.
-// Storage: src/data/levels.json { "<userId>": { xp, lastMsg, lastReact, voiceStart, voiceAcc } }.
-const fs = require('fs');
-const path = require('path');
+// Storage: core/store → data/guilds/<guildId>/levels.json
+//   { "<userId>": { xp, lastMsg, lastReact, voiceStart, voiceAcc } }
+//
+// Mọi thao tác state đều nhận `guildId` từ chính event (`msg.guildId`,
+// `newState.guild.id`, `interaction.guildId`). Bản single-guild từng đoán
+// `guilds.cache.values().next().value` — sang server thứ hai là đoán trúng
+// server nào tình cờ được cache trước, tức gán role nhầm và đếm XP chung.
 const { Events, SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const LV_FILE = path.join(DATA_DIR, 'levels.json');
-
-function loadStore() {
-  try {
-    const j = JSON.parse(fs.readFileSync(LV_FILE, 'utf8'));
-    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
-  } catch {
-    return {};
-  }
-}
-function saveStore(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(LV_FILE, JSON.stringify(data, null, 2));
-}
+const store = require('../core/store');
 
 /** Công thức sqrt: level = floor(sqrt(xp/100)) + 1. */
 function levelOf(xp) {
@@ -70,11 +59,11 @@ function record(store, userId) {
  * Role nào nằm >= cao nhất của bot thì bỏ qua (không throw) — Discord không cho bot
  * tự hạ role của chính mình.
  */
-async function applyRoles(ctx, userId, level) {
+async function applyRoles(ctx, guildId, userId, level) {
   const ranks = getRanks(ctx);
   if (!ranks.length) return false;
   try {
-    const guild = ctx.client.guilds.cache.values().next().value;
+    const guild = ctx.client.guilds.cache.get(guildId);
     if (!guild) return false;
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member || member.user.bot) return false;
@@ -112,9 +101,9 @@ async function applyRoles(ctx, userId, level) {
  * Sync, chỉ đọc cache. Cache được `init()` nạp sẵn; hụt thì trả null để caller
  * fallback sang icon unicode.
  */
-function rankTag(ctx, rank) {
+function rankTag(ctx, guildId, rank) {
   if (!rank || !rank.emojiId) return null;
-  const guild = ctx.client.guilds?.cache?.values().next().value;
+  const guild = ctx.client.guilds?.cache?.get(guildId);
   const emoji = guild?.emojis?.cache?.get(rank.emojiId);
   if (!emoji) return null;
   return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
@@ -141,22 +130,26 @@ async function handleInteraction(interaction, ctx) {
   const name = interaction.commandName;
   if (name !== 'level' && name !== 'leaderboard') return false;
 
-  const store = loadStore();
+  const guildId = interaction.guildId;
   const ranks = getRanks(ctx);
 
   if (name === 'level') {
     const user = interaction.options.getUser('user') || interaction.user;
-    const rec = record(store, user.id);
-    const beforeVoice = levelOf(rec.xp);
-    const gained = flushVoice(ctx, store, user.id);
-    if (gained > 0) addXp(store, user.id, gained);
-    saveStore(store);
+    // Đọc -> sửa -> ghi dưới khoá: giữa lúc chốt XP voice, một MessageCreate
+    // song song có thể đang cộng XP cho cùng user.
+    const { rec, before, after } = await store.updateAsync(guildId, 'levels', (s) => {
+      const r = record(s, user.id);
+      const b = levelOf(r.xp);
+      const gained = flushVoice(ctx, s, user.id);
+      if (gained > 0) addXp(s, user.id, gained);
+      return { rec: r, before: b, after: levelOf(r.xp) };
+    });
     const xp = rec.xp;
     const lv = levelOf(xp);
     const cur = xp - xpAtLevel(lv);
     const need = xpAtLevel(lv + 1) - xpAtLevel(lv);
     const rank = rankFor(ranks, lv);
-    const icon = rankTag(ctx, rank) || '🏅';
+    const icon = rankTag(ctx, guildId, rank) || '🏅';
 
     await interaction.reply({
       flags: MessageFlags.Ephemeral,
@@ -174,27 +167,32 @@ async function handleInteraction(interaction, ctx) {
           .setFooter({ text: `Level ${lv} → ${lv + 1}` }),
       ],
     });
-    if (user.id !== interaction.user.id || levelOf(rec.xp) !== beforeVoice) {
+    if (user.id !== interaction.user.id || after !== before) {
       // người khác hỏi, hoặc XP voice vừa đẩy qua bậc mới -> đồng bộ role
-      await applyRoles(ctx, user.id, lv);
+      await applyRoles(ctx, guildId, user.id, lv);
     }
     return true;
   }
 
   // /leaderboard: chốt voice cho user còn đang trong kênh (chưa có sự kiện rời).
-  const beforeLb = {};
-  for (const [id, r] of Object.entries(store)) {
-    if (!r || !r.voiceStart) continue;
-    beforeLb[id] = levelOf(r.xp);
-    const gained = flushVoice(ctx, store, id);
-    if (gained > 0) addXp(store, id, gained);
-  }
-  saveStore(store);
+  // Chỉ xếp hạng guild này — data đã khoá theo guildId từ đầu.
+  const beforeLb = await store.updateAsync(guildId, 'levels', (s) => {
+    const before = {};
+    for (const [id, r] of Object.entries(s)) {
+      if (!r || !r.voiceStart) continue;
+      before[id] = levelOf(r.xp);
+      const gained = flushVoice(ctx, s, id);
+      if (gained > 0) addXp(s, id, gained);
+    }
+    return before;
+  });
+  const levels = store.read(guildId, 'levels');
   for (const [id, before] of Object.entries(beforeLb)) {
-    if (levelOf(store[id].xp) !== before) await applyRoles(ctx, id, levelOf(store[id].xp));
+    const lv = levelOf(levels[id].xp);
+    if (lv !== before) await applyRoles(ctx, guildId, id, lv);
   }
 
-  const top = Object.entries(store)
+  const top = Object.entries(levels)
     .map(([id, r]) => ({ id, xp: (r && r.xp) || 0 }))
     .filter((r) => r.xp > 0)
     .sort((a, b) => b.xp - a.xp)
@@ -211,7 +209,7 @@ async function handleInteraction(interaction, ctx) {
   const medals = ['🥇', '🥈', '🥉'];
   const lines = top.map((r, i) => {
     const rank = rankFor(ranks, levelOf(r.xp));
-    const icon = rankTag(ctx, rank) || '▪️';
+    const icon = rankTag(ctx, guildId, rank) || '▪️';
     const tag = i < 3 ? medals[i] : `${i + 1}.`;
     return `${tag} <@${r.id}> — Lv **${levelOf(r.xp)}** · **${r.xp}** XP${rank ? ` · ${icon} ${rank.name}` : ''}`;
   });
@@ -237,11 +235,9 @@ function addXp(store, userId, amount) {
 }
 
 /** Cộng XP, lưu, đồng bộ role nếu lên bậc. Trả level trước/sau. */
-async function grantXp(ctx, userId, amount) {
-  const store = loadStore();
-  const { before, after } = addXp(store, userId, amount);
-  saveStore(store);
-  if (after !== before) await applyRoles(ctx, userId, after);
+async function grantXp(ctx, guildId, userId, amount) {
+  const { before, after } = await store.updateAsync(guildId, 'levels', (s) => addXp(s, userId, amount));
+  if (after !== before) await applyRoles(ctx, guildId, userId, after);
   return { before, after };
 }
 
@@ -269,13 +265,13 @@ module.exports = {
   name: 'levels',
   commands: [levelCommand, leaderboardCommand],
   handleInteraction,
-  init: async (ctx) => {
+  init: async (ctx, guildId) => {
     const ranks = getRanks(ctx);
     if (!ranks.length) {
-      console.warn('Levels: config.levels.roles rỗng — chưa gán role rank được.');
+      console.warn(`Levels [${guildId}]: config.levels.roles rỗng — chưa gán role rank được.`);
       return;
     }
-    const guild = ctx.client.guilds.cache.values().next().value;
+    const guild = ctx.client.guilds.cache.get(guildId);
     if (!guild) return;
 
     // Gateway KHÔNG gửi emoji trong GUILD_CREATE -> cache rỗng lúc khởi động.
@@ -283,7 +279,10 @@ module.exports = {
     try {
       await guild.emojis.fetch();
     } catch (err) {
-      console.warn('Levels: không nạp được emoji guild — icon rank sẽ fallback unicode:', err.message);
+      console.warn(
+        `Levels [${guildId}]: không nạp được emoji guild — icon rank sẽ fallback unicode:`,
+        err.message
+      );
     }
 
     const myTop = guild.members.me ? guild.members.me.roles.highest.position : 0;
@@ -293,7 +292,7 @@ module.exports = {
     });
     if (blocked.length) {
       console.warn(
-        `Levels: ${blocked.length} role rank cao bằng/bố hơn bot (${blocked.map((b) => b.name).join(', ')}) — sẽ không cấp được.`
+        `Levels [${guildId}]: ${blocked.length} role rank cao bằng/bố hơn bot (${blocked.map((b) => b.name).join(', ')}) — sẽ không cấp được.`
       );
     }
   },
@@ -306,14 +305,19 @@ module.exports = {
         if (!content) return;
         if (content.startsWith('`') || content.startsWith('>')) return;
 
-        const store = loadStore();
-        const rec = record(store, msg.author.id);
-        const now = Date.now();
-        if (now - rec.lastMsg < (ctx.config.levels.cooldownMs || 60000)) return;
-        rec.lastMsg = now;
-        saveStore(store);
+        // Chặn cooldown nằm TRONG khoá, không phải ngoài: đọc `lastMsg` rồi
+        // ghi ở 2 lần riêng thì hai tin gần nhau đều thấy "đủ hạn" và cùng
+        // được cộng XP.
+        const ok = await store.updateAsync(msg.guildId, 'levels', (s) => {
+          const rec = record(s, msg.author.id);
+          const now = Date.now();
+          if (now - rec.lastMsg < (ctx.config.levels.cooldownMs || 60000)) return false;
+          rec.lastMsg = now;
+          return true;
+        });
+        if (!ok) return;
 
-        const { before, after } = await grantXp(ctx, msg.author.id, ctx.config.levels.xp?.message ?? 1);
+        const { before, after } = await grantXp(ctx, msg.guildId, msg.author.id, ctx.config.levels.xp?.message ?? 1);
         if (after !== before) {
           try {
             await msg.channel.send(`🎉 <@${msg.author.id}> lên **Level ${after}**!`);
@@ -338,14 +342,16 @@ module.exports = {
         if (!msg || !msg.guild) return;
         if (msg.author && msg.author.id === user.id) return;
 
-        const store = loadStore();
-        const rec = record(store, msg.author.id);
-        const now = Date.now();
-        if (now - rec.lastReact < (ctx.config.levels.cooldownMs || 60000)) return;
-        rec.lastReact = now;
-        saveStore(store);
+        const ok = await store.updateAsync(msg.guildId, 'levels', (s) => {
+          const rec = record(s, msg.author.id);
+          const now = Date.now();
+          if (now - rec.lastReact < (ctx.config.levels.cooldownMs || 60000)) return false;
+          rec.lastReact = now;
+          return true;
+        });
+        if (!ok) return;
 
-        await grantXp(ctx, msg.author.id, ctx.config.levels.xp?.reaction ?? 2);
+        await grantXp(ctx, msg.guildId, msg.author.id, ctx.config.levels.xp?.reaction ?? 2);
       },
     },
     {
@@ -358,20 +364,22 @@ module.exports = {
         // tục và user ngồi im trong voice mất sạch XP.
         if (oldState.channelId === newState.channelId) return;
         if (newState.member && newState.member.user && newState.member.user.bot) return;
+        const guildId = (newState.guild || oldState.guild)?.id;
+        if (!guildId) return;
 
-        const store = loadStore();
-        const rec = record(store, userId);
-        const before = levelOf(rec.xp);
-
-        if (oldState.channelId && rec.voiceStart) {
-          addXp(store, userId, flushVoice(ctx, store, userId));
-          rec.voiceStart = 0;
-        }
-        if (newState.channelId) {
-          rec.voiceStart = Date.now();
-        }
-        saveStore(store);
-        if (levelOf(rec.xp) !== before) await applyRoles(ctx, userId, levelOf(rec.xp));
+        const { before, after } = await store.updateAsync(guildId, 'levels', (s) => {
+          const rec = record(s, userId);
+          const b = levelOf(rec.xp);
+          if (oldState.channelId && rec.voiceStart) {
+            addXp(s, userId, flushVoice(ctx, s, userId));
+            rec.voiceStart = 0;
+          }
+          if (newState.channelId) {
+            rec.voiceStart = Date.now();
+          }
+          return { before: b, after: levelOf(rec.xp) };
+        });
+        if (after !== before) await applyRoles(ctx, guildId, userId, after);
       },
     },
   ],

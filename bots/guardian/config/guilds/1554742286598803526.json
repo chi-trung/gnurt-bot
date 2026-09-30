@@ -1,0 +1,131 @@
+{
+  "modules": {
+    "welcome": true,
+    "verify": true,
+    "ticket": true,
+    "logging": true,
+    "automod": true,
+    "moderation": true,
+    "reactionroles": true,
+    "tags": true,
+    "starboard": true,
+    "suggestions": true,
+    "levels": true
+  },
+  "automod": {
+    "invites": true,
+    "badwords": [
+      "fuck",
+      "shit",
+      "bitch"
+    ],
+    "spam": {
+      "messages": 6,
+      "windowMs": 5000,
+      "timeoutSeconds": 300
+    },
+    "mentions": {
+      "max": 6
+    }
+  },
+  "starboard": {
+    "threshold": 3,
+    "emoji": "⭐"
+  },
+  "levels": {
+    "xp": {
+      "message": 1,
+      "reaction": 2
+    },
+    "cooldownMs": 60000,
+    "voice": {
+      "xpPer": 10,
+      "perMinutes": 5
+    },
+    "roles": [
+      {
+        "name": "Sắt",
+        "roleId": "1554809014708080671",
+        "emojiId": "1554806770478878720",
+        "level": 1,
+        "color": 3483428
+      },
+      {
+        "name": "Đồng",
+        "roleId": "1554809009863921716",
+        "emojiId": "1554806772487688202",
+        "level": 3,
+        "color": 8343097
+      },
+      {
+        "name": "Bạc",
+        "roleId": "1554809005166166087",
+        "emojiId": "1554806774463463444",
+        "level": 5,
+        "color": 4151669
+      },
+      {
+        "name": "Vàng",
+        "roleId": "1554809000418222080",
+        "emojiId": "1554806776363491430",
+        "level": 8,
+        "color": 14127393
+      },
+      {
+        "name": "Bạch Kim",
+        "roleId": "1554808995494105220",
+        "emojiId": "1554806778380816404",
+        "level": 12,
+        "color": 695908
+      },
+      {
+        "name": "Kim Cương",
+        "roleId": "1554808990884561016",
+        "emojiId": "1554806780314255412",
+        "level": 16,
+        "color": 2107067
+      },
+      {
+        "name": "Cao Thủ",
+        "roleId": "1554808985729896519",
+        "emojiId": "1554806782197502015",
+        "level": 21,
+        "color": 7870868
+      },
+      {
+        "name": "Đại Cao Thủ",
+        "roleId": "1554808981011173447",
+        "emojiId": "1554806784328339456",
+        "level": 27,
+        "color": 9770808
+      },
+      {
+        "name": "Thách đầu",
+        "roleId": "1554808976078536705",
+        "emojiId": "1554806786719088660",
+        "level": 34,
+        "color": 359858
+      }
+    ]
+  },
+  "schema": 2,
+  "guildId": "1554742286598803526",
+  "channels": {
+    "welcome": "1554748465232351263",
+    "ticket": "1554748500045070419",
+    "ticketCategory": "1554748338262384720",
+    "log": "1554748461461540896",
+    "verify": "1554771434549678131",
+    "starboard": "1554777506169491527",
+    "suggestions": "1554782911142694934"
+  },
+  "roles": {
+    "newbie": "1554748071747788870",
+    "admin": [
+      "1554748061077737475"
+    ],
+    "verify": "1554771429889802241",
+    "verifyPending": "1554771432305860629"
+  },
+  "configured": true
+}

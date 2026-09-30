@@ -2,25 +2,49 @@
 // (suggestions đã có test riêng ở test-suggestions-logic.js)
 //
 // KHÔNG gọi Discord API. Chỉ nạp module rồi bơm dữ liệu giả vào handler,
-// kiểm tra kết quả. File data/*.json bị XOÁ trước và sau khi chạy — mọi module
-// đều load/save qua try-catch nên thiếu file = kho rỗng, không mất gì.
-// verify-panel.json được backup riêng vì nó trỏ tới tin nhắn THẬT trên Discord.
+// kiểm tra kết quả.
 //
-// ĐỪNG chạy khi Guardian đang chạy, và BACKUP src/data trước: xóa hẳn (không
-// khôi phục snapshot) là chủ đích — nếu lúc bắt đầu file đã bẩn sẵn thì restore
-// giữ lại rác cho lần chạy sau. Đã xảy ra: rr.json mất thật, không phục hồi được
-// vì .gitignore loại trừ src/data.
+// Dữ liệu thật KHÔNG thể bị test này chạm vào: `GUARDIAN_DATA_DIR` trỏ vào một
+// thư mục tạm, đặt TRƯỚC mọi `require` vì `core/store` đọc biến này lúc nạp module.
+// Bản cũ xoá `src/data/*.json` thật rồi restore — đã từng làm mất `rr.json`
+// không phục hồi được, vì `.gitignore` loại trừ `data/` nên git không cứu được.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const GUARD = 'C:/Users/Gnurt/Desktop/bot-discord/bots/guardian';
 const DJ = path.join(GUARD, 'node_modules/discord.js');
 const { Collection, PermissionFlagsBits, MessageFlags } = require(DJ);
 
-// ticket.js đọc process.env LÚC NẠP MODULE (không qua ctx.env) → phải set trước require.
+// Snowflake thật — parse regex trong module yêu cầu \d+, dùng chữ sẽ che bug.
+// Khai ở đây vì `process.env.GUILD_ID` bên dưới cần nó TRƯỚC mọi require.
+const GUILD = '1554742286598803526';
+
+process.env.GUARDIAN_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-test-'));
+// `core/guildconfig` đọc `config/guilds/` thật → ghim vào thư mục tạm để test
+// không phụ thuộc file config của server thật (và không đọc nhầm config khi
+// thêm server mới).
+process.env.GUARDIAN_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-cfg-'));
+
+// `guildconfig.fromEnv()` chỉ dựng config khi `GUILD_ID` khớp guild được hỏi —
+// ghim vào GUILD test để nhánh fallback chạy đúng như lúc chạy thật.
+process.env.GUILD_ID = GUILD;
+// `fromEnv` đọc các biến này thành `channels.*` / `roles.*`; ticket/verify/
+// welcome/starboard/suggestions đều lấy id từ đó nên phải set.
+process.env.WELCOME_CHANNEL_ID = '1554748465232351263';
+process.env.NEWBIE_ROLE_ID = '1554748071747788870';
 process.env.TICKET_CHANNEL_ID = '1554748500045070419';
 process.env.TICKET_CATEGORY_ID = '1554748338262384720';
 process.env.ADMIN_ROLE_ID = '1554748061077737475';
+process.env.LOG_CHANNEL_ID = '1554748461461540896';
+process.env.VERIFY_CHANNEL_ID = '1554771434549678131';
+process.env.VERIFY_ROLE_ID = '1554771429889802241';
+process.env.VERIFY_PENDING_ROLE_ID = '1554771432305860629';
+process.env.STARBOARD_CHANNEL_ID = '1554777506169491527';
+process.env.SUGGESTIONS_CHANNEL_ID = '1554782911142694934';
+
+const store = require(path.join(GUARD, 'src/core/store'));
+const guildConfig = require(path.join(GUARD, 'src/core/guildconfig'));
 
 const welcome = require(path.join(GUARD, 'src/modules/welcome'));
 const verify = require(path.join(GUARD, 'src/modules/verify'));
@@ -34,29 +58,23 @@ const starboard = require(path.join(GUARD, 'src/modules/starboard'));
 const levels = require(path.join(GUARD, 'src/modules/levels'));
 
 // ---------------------------------------------------------------- hạ tầng test
-const DATA_DIR = path.join(GUARD, 'src/data');
-const DATA_FILES = ['tags.json', 'rr.json', 'warns.json', 'starboard.json', 'levels.json'];
+// `resetData`/`readData` đi thẳng qua `core/store` chứ không đụng đĩa: cache
+// trong RAM của store là nguồn đọc, nên test thấy đúng thứ module vừa ghi mà
+// không cần chờ flush. Thư mục tạm đã ghim ở trên nên kể cả khi có ghi xuống
+// đĩa thật thì cũng không chạm `src/data`.
+const resetData = (name, obj) => store.write(GUILD, name.replace(/\.json$/, ''), obj);
+const readData = (name) => store.read(GUILD, name.replace(/\.json$/, ''));
 
-// Mỗi module đều load/save qua try-catch nên thiếu file = kho rỗng. Xoá hẳn file
-// về đúng trạng thái "chưa có" thay vì khôi phục nội dung lúc bắt đầu: nếu lúc đó
-// file đã bẩn sẵn thì restore sẽ giữ lại rác cho lần chạy sau.
-//
-// verify-panel.json CỐ Ý KHÔNG nằm trong danh sách: nó trỏ tới tin nhắn THẬT trên
-// Discord. Xoá nó khiến Guardian tạo panel trùng mỗi lần chạy test rồi restart.
-// Phần test verify dùng PANEL_FILE riêng và tự dọn.
-const PANEL_FILE = path.join(DATA_DIR, 'verify-panel.json');
-const panelBackup = fs.existsSync(PANEL_FILE) ? fs.readFileSync(PANEL_FILE, 'utf8') : null;
-for (const f of DATA_FILES) fs.rmSync(path.join(DATA_DIR, f), { force: true });
+// Dọn thư mục tạm khi kết thúc. Không còn lý do backup/restore: dữ liệu thật
+// không nằm trong đây nữa.
 const restore = () => {
-  for (const f of DATA_FILES) fs.rmSync(path.join(DATA_DIR, f), { force: true });
-  if (panelBackup === null) fs.rmSync(PANEL_FILE, { force: true });
-  else fs.writeFileSync(PANEL_FILE, panelBackup);
-};
-const resetData = (name, obj) =>
-  fs.writeFileSync(path.join(DATA_DIR, name), JSON.stringify(obj, null, 2));
-const readData = (name) => {
-  const p = path.join(DATA_DIR, name);
-  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+  for (const dir of [process.env.GUARDIAN_DATA_DIR, process.env.GUARDIAN_CONFIG_DIR]) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* thư mục tạm, không ghi được thì cũng không sao */
+    }
+  }
 };
 
 let pass = 0;
@@ -79,42 +97,96 @@ function emb(p, i = 0) {
 }
 
 // Snowflake thật — parse regex trong module yêu cầu \d+, dùng chữ sẽ che bug.
-const GUILD = '1554742286598803526';
 const CHAN = '1554748500045070419';
 const BOT = '1554756064182804560';
+// Server thứ hai (dùng để test cô lập). Cần khai ở đây vì mock client phải
+// biết từ đầu — có guild sai nằm trước GUILD trong Collection.
+const GUILD2 = '900000000000000002';
 
-// Một kênh giả dùng chung cho log / welcome / panel / starboard.
+// Kênh giả, tra cứu THEO ID.
+//
+// `fetch` trả về một kênh cố định cho mọi id là sai ở đúng chỗ đáng sợ nhất:
+// module so `panel.channelId === channelId` để tái dùng panel, và `starboard`
+// so msg đã đăng còn sống hay không. Một kênh cố định làm mọi lỗi "đăng nhầm
+// kênh server khác" vô hình. Mỗi id giờ là một kênh riêng, id không có thì
+// `fetch` ném như Discord thật.
+//
+// `live` là registry tin nhắn CỐ Ý tách khỏi `rec.sends`: `clearRec()` xoá lịch
+// sử để test đo lại, nhưng tin đã gửi trên Discord vẫn còn sống — gộp hai thứ
+// lại thì mọi bài "sửa tin cũ" đều hỏng.
 const rec = { sends: [], edits: [], deletes: [] };
-const fakeChannel = {
-  id: CHAN,
-  name: 'test-chan',
+const live = new Map(); // messageId -> channelId
+const channels = new Map();
+let msgSeq = 0;
+
+const mkChannel = (id, name = 'test-chan') => ({
+  id,
+  name,
   isTextBased: () => true,
   messages: {
-    // starboard.js sửa bài cũ qua sbChannel.messages.fetch(id).edit(...);
-    // reactionroles.js xoá qua messages.fetch(id).delete(). Cần cả hai.
-    fetch: async () => ({
-      edit: async (q) => rec.edits.push(q),
-      delete: async () => rec.deletes.push('starboard-msg'),
-    }),
+    fetch: async (mid) => {
+      if (live.get(mid) !== id) throw new Error('Unknown Message');
+      return {
+        id: mid,
+        channelId: id,
+        edit: async (q) => rec.edits.push(q),
+        delete: async () => rec.deletes.push('starboard-msg'),
+        react: async () => {},
+      };
+    },
   },
+  // `send` nhận cả string lẫn payload — module khác nhau gọi kiểu khác nhau
+  // (automod gửi string, starboard gửi `{embeds}`), nên chuẩn hoá về `{content}`.
   send: async (p) => {
-    rec.sends.push(p);
+    const mid = String(++msgSeq) + '0000';
+    const payload = typeof p === 'string' ? { content: p } : { ...p };
+    live.set(mid, id);
+    rec.sends.push({ ...payload, __msgId: mid, __chanId: id });
     return {
-      id: '1554782911142694935',
-      channelId: CHAN,
-      url: `https://discord.com/channels/${GUILD}/${CHAN}/1554782911142694935`,
+      id: mid,
+      channelId: id,
+      url: `https://discord.com/channels/${GUILD}/${id}/${mid}`,
       react: async (e) => rec.sends.push({ __react: e }),
       edit: async (q) => rec.edits.push(q),
       delete: async () => rec.deletes.push('sent-msg'),
     };
   },
   delete: async () => rec.deletes.push('channel'),
-};
+});
+
+const fakeChannel = mkChannel(CHAN);
+
+// Mọi kênh mà config/env trỏ tới. `OTHER` là kênh của guild KHÁC — mọi
+// `channels.fetch` vào nó đều bị ghi lại, để test bắt được "đăng nhầm server".
+const OTHER = '900000000000000009';
+const otherChannel = mkChannel(OTHER, 'kenh-server-khac');
+for (const id of [
+  CHAN, OTHER,
+  '1554748461461540896', // LOG
+  '1554748465232351263', // WELCOME
+  '1554777506169491527', // STARBOARD
+  '1554782911142694934', // SUGGESTIONS
+  '1554771434549678131', // VERIFY_CHANNEL
+]) {
+  if (id !== CHAN) channels.set(id, mkChannel(id, 'k-' + id));
+}
+channels.set(OTHER, otherChannel);
+
 const clearRec = () => { rec.sends.length = 0; rec.edits.length = 0; rec.deletes.length = 0; };
 const logSends = () => rec.sends.filter((s) => emb(s).title);
+/** Tin gửi đi kênh nào — dùng để chứng minh module không đăng nhầm server. */
+const sentTo = (chanId) => rec.sends.filter((s) => s && s.__chanId === chanId);
 
 const ctxBase = {
-  client: { channels: { fetch: async () => fakeChannel } },
+  client: {
+    channels: {
+      fetch: async (id) => {
+        if (id === undefined) throw new TypeError('Cannot read properties of undefined (reading \'id\')');
+        if (!channels.has(id)) throw new Error('Unknown Channel: ' + id);
+        return channels.get(id);
+      },
+    },
+  },
   config: {
     modules: {},
     automod: {
@@ -125,17 +197,12 @@ const ctxBase = {
     },
     starboard: { threshold: 3, emoji: '⭐' },
   },
-  env: {
-    LOG_CHANNEL_ID: '1554748461461540896',
-    ADMIN_ROLE_ID: 'ROLE_ADMIN',
-    STARBOARD_CHANNEL_ID: '1554777506169491527',
-    SUGGESTIONS_CHANNEL_ID: '1554782911142694934',
-    WELCOME_CHANNEL_ID: '1554748465232351263',
-    NEWBIE_ROLE_ID: '1554748071747788870',
-    VERIFY_CHANNEL_ID: '1554771434549678131',
-    VERIFY_ROLE_ID: '1554771429889802241',
-    VERIFY_PENDING_ROLE_ID: '1554771432305860629',
-  },
+  // `ctx.cfg(guildId)` — module gọi cái này thay cho `ctx.env`.
+  // Dùng loader THẬT (`core/guildconfig`) với thư mục config tạm + `GUILD_ID`
+  // trỏ vào GUILD: `load()` thấy không có file thì fallback dựng từ
+  // `process.env` (`fromEnv`), nên chỉ cần set các biến ở trên. Không tự viết
+  // lại logic fallback — mock khác hành vi thật thì test xanh giả.
+  cfg: (guildId) => guildConfig.load(guildId),
 };
 
 function mkIface(over = {}) {
@@ -145,6 +212,7 @@ function mkIface(over = {}) {
     isButton: () => false,
     isAutocomplete: () => false,
     commandName: 'x',
+    guildId: GUILD,
     guild: { id: GUILD, name: 'server g n u r t', ownerId: '100000000000000001' },
     channel: null,
     user: { id: '200000000000000001', tag: 'Tester#0001', toString: () => '@Tester' },
@@ -177,6 +245,7 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   const mkMsg = (authorId, content, mentionCount = 0) => {
     const timedOut = [];
     const m = {
+      guildId: GUILD,
       guild: { id: GUILD },
       content,
       author: { id: authorId, bot: false, toString: () => '@U' + authorId },
@@ -215,7 +284,7 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   m = mkMsg('10', 'mời bạn vào https://discord.gg/abc123 nhé');
   await onMsg(ctxBase, m);
   check('xóa tin vi phạm', rec.deletes.includes('msg'));
-  check('báo trong kênh', rec.sends.some((s) => typeof s === 'string' && s.includes('link mời server')));
+  check('báo trong kênh', sentTo(CHAN).some((s) => s.content?.includes('link mời server')));
   check('ghi log automod', logSends().some((s) => emb(s).title === '🛡️ Auto-mod'));
   check('chưa timeout ở strike 1', m.__timedOut.length === 0);
 
@@ -499,6 +568,7 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   });
   const mkSbMsg = (id, over = {}) => ({
     id,
+    guildId: GUILD,
     guild: { id: GUILD },
     author: { bot: false, tag: 'A#0003', displayAvatarURL: () => 'https://x/a.png' },
     content: 'nội dung hay',
@@ -524,14 +594,21 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   clearRec();
   await onReactAdd(ctxBase, mkReaction(mkSbMsg('905'), 9, { id: null, name: '❤️' }), { bot: false });
   check('sai emoji -> bỏ qua', rec.sends.length === 0);
-  const ctxNoSb = { ...ctxBase, env: { ...ctxBase.env, STARBOARD_CHANNEL_ID: '' } };
-  await onReactAdd(ctxNoSb, mkReaction(mkSbMsg('906'), 9), { bot: false });
-  check('thiếu STARBOARD_CHANNEL_ID -> bỏ qua, không crash', rec.sends.length === 0);
+  // Guild chưa có `config/guilds/<id>.json` thì `cfg()` trả shape rỗng → thiếu
+  // kênh starboard. Dùng guild lạ (không phải GUILD) để kích hoạt đúng nhánh
+  // "chưa cấu hình" thay vì giả lập bằng cách xoá biến env.
+  const ctxNoSb = { ...ctxBase, cfg: () => ({ channels: {}, roles: {}, starboard: { threshold: 3, emoji: '⭐' } }) };
+  await onReactAdd(ctxNoSb, mkReaction(mkSbMsg('906')), 9, { bot: false });
+  check('guild chưa cấu hình -> bỏ qua, không crash', rec.sends.length === 0);
 
   clearRec();
   await onReactAdd(ctxBase, mkReaction(mkSbMsg('910'), 3), { bot: false });
   check('đạt ngưỡng -> đăng starboard', rec.sends.length === 1, String(rec.sends.length));
-  check('lưu map tin gốc -> tin starboard', readData('starboard.json')['910'] === '1554782911142694935', JSON.stringify(readData('starboard.json')));
+  // id tin starboard do kênh giả sinh ra — so với id thật vừa nhận chứ không
+  // hardcode, nếu không test vừa khớp nhầm vừa hỏng mỗi lần đổi mock.
+  const sb910 = rec.sends[0].__msgId;
+  check('đăng vào kênh starboard', rec.sends[0].__chanId === SB, rec.sends[0].__chanId);
+  check('lưu map tin gốc -> tin starboard', readData('starboard.json')['910'] === sb910, JSON.stringify(readData('starboard.json')));
   check('embed có màu vàng', emb(rec.sends[0]).color === 0xffd700);
   check('footer có số sao + tên kênh', /3 ⭐ • #chat/.test(emb(rec.sends[0]).footer?.text || ''), emb(rec.sends[0]).footer?.text);
   check('mô tả có nội dung + link jump', emb(rec.sends[0]).description.includes('nội dung hay') && emb(rec.sends[0]).description.includes('[Jump]'));
@@ -559,12 +636,12 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   check('map không nhân bản', Object.keys(readData('starboard.json')).length === 4, String(Object.keys(readData('starboard.json')).length));
 
   console.log('-- bài starboard bị xoá -> gửi lại --');
-  const oldFetch = fakeChannel.messages.fetch;
-  fakeChannel.messages.fetch = async () => { throw new Error('Unknown Message'); };
+  // Xoá tin khỏi registry `live` để mô phỏng người dùng tự xoá bài starboard.
+  live.delete(sb910);
   clearRec();
   await onReactAdd(ctxBase, mkReaction(mkSbMsg('910'), 8), { bot: false });
   check('fetch lỗi -> gửi lại bài mới', rec.sends.length === 1, String(rec.sends.length));
-  fakeChannel.messages.fetch = oldFetch;
+  check('gửi lại -> map trỏ tin MỚI', readData('starboard.json')['910'] !== sb910, JSON.stringify(readData('starboard.json')));
 
   console.log('-- bỏ reaction (updateCount) --');
   clearRec();
@@ -641,6 +718,14 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   r = await runRr('delete', { link: `https://discord.com/channels/${GUILD}/${CHAN}/999999999999999999` });
   check('id không có trong DB -> báo', /Không tìm thấy panel/.test(r.i.edited || ''), r.i.edited);
 
+  // Link trỏ server khác: nếu không chặn, bot sẽ xoá panel của server đó.
+  resetData('rr.json', [{ channelId: CHAN, messageId: '1554782911142694935', emoji: '👍', roleId: ROLES.below.id }]);
+  clearRec();
+  r = await runRr('delete', { link: `https://discord.com/channels/900000000000000001/${CHAN}/1554782911142694935` });
+  check('link server khác -> từ chối, KHÔNG xoá', /server khác/i.test(r.i.edited || ''), r.i.edited);
+  check('link server khác -> record còn nguyên', readData('rr.json').length === 1, JSON.stringify(readData('rr.json')));
+  check('link server khác -> không xoá tin nào', rec.deletes.length === 0, JSON.stringify(rec.deletes));
+
   resetData('rr.json', [{ channelId: CHAN, messageId: '1554782911142694935', emoji: '👍', roleId: ROLES.below.id }]);
   clearRec();
   r = await runRr('delete', { link: `https://discord.com/channels/${GUILD}/${CHAN}/1554782911142694935` });
@@ -654,8 +739,11 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   const onRRAdd = ev(reactionroles, 'messageReactionAdd');
   const onRRRemove = ev(reactionroles, 'messageReactionRemove');
   const added = [];
+  // guild phải có `id`: `grantOrRevoke` tra store theo `message.guild.id`.
+  const rrGuild = (fetch) => ({ id: GUILD, members: { fetch } });
+  const rrFetch = async (uid) => ({ user: { bot: false }, roles: { add: async (r) => added.push(['add', uid, r]), remove: async (r) => added.push(['rm', uid, r]) } });
   const mkRRReaction = (emoji, count = 1) => ({
-    message: { id: '1554782911142694935', guild: { members: { fetch: async (uid) => ({ user: { bot: false }, roles: { add: async (r) => added.push(['add', uid, r]), remove: async (r) => added.push(['rm', uid, r]) } }) } } },
+    message: { id: '1554782911142694935', guild: rrGuild(rrFetch) },
     emoji,
     count,
     partial: false,
@@ -669,10 +757,10 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   check('sai emoji -> không gán', added.length === 0);
   resetData('rr.json', [{ channelId: CHAN, messageId: '999', emoji: 'star:1', roleId: ROLES.below.id }]);
   added.length = 0;
-  await onRRAdd(rrCtx, { ...mkRRReaction({ id: '1', name: 'star' }), message: { id: '999', guild: { members: { fetch: async () => ({ user: { bot: false }, roles: { add: async () => added.push('x') } }) } } } }, { id: 'u1', bot: false });
+  await onRRAdd(rrCtx, { ...mkRRReaction({ id: '1', name: 'star' }), message: { id: '999', guild: rrGuild(async () => ({ user: { bot: false }, roles: { add: async () => added.push('x') } })) } }, { id: 'u1', bot: false });
   check('emoji custom so name:id', added.length === 1, String(added.length));
   added.length = 0;
-  await onRRAdd(rrCtx, { ...mkRRReaction({ id: '1', name: 'other' }), message: { id: '999', guild: { members: { fetch: async () => ({ user: { bot: false }, roles: { add: async () => added.push('x') } }) } } } }, { id: 'u1', bot: false });
+  await onRRAdd(rrCtx, { ...mkRRReaction({ id: '1', name: 'other' }), message: { id: '999', guild: rrGuild(async () => ({ user: { bot: false }, roles: { add: async () => added.push('x') } })) } }, { id: 'u1', bot: false });
   check('emoji custom sai tên -> không gán', added.length === 0);
   await onRRAdd(rrCtx, mkRRReaction({ id: null, name: '👍' }), { id: 'u1', bot: true });
   check('người bấm là bot -> bỏ qua', added.length === 0);
@@ -686,18 +774,22 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   resetData('verify-panel.json', null);
   const onMemberAdd = ev(verify, 'guildMemberAdd');
   const mkMemberAdd = (id, bot) => ({
+    // `member.guild.id` — verify gọi `idsOf(ctx, member.guild.id)` để lấy config
+    // đúng guild; thiếu field này thì crash trước khi tới assert.
+    guild: { id: GUILD },
     user: { id, bot, tag: 'N#0004' },
     roles: { add: async (r) => added.push(['madd', id, r]) },
   });
   added.length = 0;
   await onMemberAdd(ctxBase, mkMemberAdd('400', false));
-  check('thành viên mới -> gán role chờ', added.some((a) => a[2] === ctxBase.env.VERIFY_PENDING_ROLE_ID), JSON.stringify(added));
+  check('thành viên mới -> gán role chờ', added.some((a) => a[2] === ctxBase.cfg(GUILD).roles.verifyPending), JSON.stringify(added));
   added.length = 0;
   await onMemberAdd(ctxBase, mkMemberAdd('401', true));
   check('bot mới vào -> không gán role', added.length === 0);
   added.length = 0;
-  await onMemberAdd({ ...ctxBase, env: { ...ctxBase.env, VERIFY_PENDING_ROLE_ID: '' } }, mkMemberAdd('402', false));
-  check('thiếu VERIFY_PENDING_ROLE_ID -> bỏ qua', added.length === 0);
+  // Guild chưa cấu hình → `roles.verifyPending` rỗng → bỏ qua.
+  await onMemberAdd({ ...ctxBase, cfg: () => ({ channels: {}, roles: {} }) }, mkMemberAdd('402', false));
+  check('thiếu roles.verifyPending -> bỏ qua', added.length === 0);
 
   const agree = (roles) => mkIface({
     isButton: () => true,
@@ -707,8 +799,16 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   t = mkIface({ isButton: () => true, customId: 'verify:xxx' });
   check('nút khác -> false', (await verify.handleInteraction(t.i, ctxBase)) === false);
   t = agree([]);
-  const ctxNoRole = { ...ctxBase, env: { ...ctxBase.env, VERIFY_ROLE_ID: '' } };
-  check('thiếu VERIFY_ROLE_ID -> false', (await verify.handleInteraction(t.i, ctxNoRole)) === false);
+  // Guild chưa cấu hình → `roles.verify` rỗng. `guildconfig` CACHE theo guildId
+  // nên phải trả config rỗng từ `cfg` override, không sửa `process.env` (sửa thì
+  // cache cũ vẫn còn giá trị và test xanh giả).
+  const ctxNoRole = { ...ctxBase, cfg: () => ({ channels: { verify: '1554771434549678131' }, roles: {} }) };
+  // Server thứ hai chưa cấu hình role: phải BÁO, không im lặng. Im lặng thì
+  // admin tưởng nút hỏng. (Bản cũ trả false — người dùng thấy gì cũng không.)
+  check('thiếu VERIFY_ROLE_ID -> báo chứ không im lặng',
+    (await verify.handleInteraction(t.i, ctxNoRole)) === true && /chưa được cấu hình/.test(t.captured?.content || ''),
+    t.captured?.content);
+  check('thiếu VERIFY_ROLE_ID -> không gán role', added.length === 0);
 
   added.length = 0;
   t = mkIface({ isButton: () => true, customId: 'verify:agree', member: null });
@@ -716,45 +816,51 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   check('không lấy được member -> báo lỗi', /Không tìm thấy thành viên/.test(t.captured?.content || ''), t.captured?.content);
 
   added.length = 0;
-  t = agree([ctxBase.env.VERIFY_ROLE_ID]);
+  t = agree([ctxBase.cfg(GUILD).roles.verify]);
   await verify.handleInteraction(t.i, ctxBase);
   check('đã có role -> báo đã xác nhận', /đã xác nhận rồi/.test(t.captured?.content || ''), t.captured?.content);
   check('không gán lại role', added.length === 0);
 
   clearRec();
   added.length = 0;
-  t = agree([ctxBase.env.VERIFY_PENDING_ROLE_ID]);
+  t = agree([ctxBase.cfg(GUILD).roles.verifyPending]);
   await verify.handleInteraction(t.i, ctxBase);
-  check('gán role ✅', added.some((a) => a[0] === 'vadd' && a[1] === ctxBase.env.VERIFY_ROLE_ID), JSON.stringify(added));
-  check('gỡ role ⏳', added.some((a) => a[0] === 'vrm' && a[1] === ctxBase.env.VERIFY_PENDING_ROLE_ID), JSON.stringify(added));
+  check('gán role ✅', added.some((a) => a[0] === 'vadd' && a[1] === ctxBase.cfg(GUILD).roles.verify), JSON.stringify(added));
+  check('gỡ role ⏳', added.some((a) => a[0] === 'vrm' && a[1] === ctxBase.cfg(GUILD).roles.verifyPending), JSON.stringify(added));
   check('ghi log xác nhận', logSends().some((s) => emb(s).title === '✅ Thành viên đã xác nhận'));
 
   added.length = 0;
-  t = agree([ctxBase.env.VERIFY_PENDING_ROLE_ID]);
+  t = agree([ctxBase.cfg(GUILD).roles.verifyPending]);
   t.i.member.roles.add = async () => { throw new Error('Missing Permissions'); };
   await verify.handleInteraction(t.i, ctxBase);
   check('gán role lỗi -> báo ❌, không crash', /❌ Không xác nhận được: Missing Permissions/.test(t.captured?.content || ''), t.captured?.content);
 
   console.log('-- init: tạo & tái dùng panel --');
+  const VCHAN = ctxBase.cfg(GUILD).channels.verify;
   clearRec();
   resetData('verify-panel.json', null);
-  await verify.init(ctxBase);
+  await verify.init(ctxBase, GUILD);
   check('chưa có panel -> tạo mới', rec.sends.length === 1);
-  check('lưu vị trí panel', readData('verify-panel.json')?.messageId === '1554782911142694935', JSON.stringify(readData('verify-panel.json')));
+  const vPanel = readData('verify-panel.json');
+  check('lưu vị trí panel', vPanel?.messageId === rec.sends[0].__msgId && vPanel.channelId === VCHAN, JSON.stringify(vPanel));
+  check('đăng đúng kênh xác nhận', rec.sends[0].__chanId === VCHAN, rec.sends[0].__chanId);
   check('panel có nút verify:agree', JSON.stringify(rec.sends[0]).includes('verify:agree'));
   clearRec();
-  await verify.init(ctxBase);
+  await verify.init(ctxBase, GUILD);
   check('panel còn -> không tạo lại', rec.sends.length === 0);
   clearRec();
-  await verify.init({ ...ctxBase, env: { ...ctxBase.env, VERIFY_CHANNEL_ID: '' } });
+  await verify.init({ ...ctxBase, cfg: () => ({ channels: {}, roles: {} }) }, GUILD);
   check('thiếu VERIFY_CHANNEL_ID -> bỏ qua, không crash', rec.sends.length === 0);
-  resetData('verify-panel.json', { channelId: CHAN, messageId: '999' });
-  const goodFetch = fakeChannel.messages.fetch;
-  fakeChannel.messages.fetch = async () => { throw new Error('Unknown Message'); };
+  // Panel trỏ sang kênh KHÁC (đổi cấu hình) -> phải dựng lại ở kênh mới.
+  resetData('verify-panel.json', { channelId: '1554771434549678999', messageId: rec.sends[0]?.__msgId });
   clearRec();
-  await verify.init(ctxBase);
-  check('panel cũ đã mất -> tạo lại', rec.sends.length === 1);
-  fakeChannel.messages.fetch = goodFetch;
+  await verify.init(ctxBase, GUILD);
+  check('panel ở kênh khác -> dựng lại ở kênh đúng', rec.sends.length === 1 && rec.sends[0].__chanId === VCHAN, JSON.stringify(rec.sends.map((s) => s.__chanId)));
+  live.delete(readData('verify-panel.json').messageId);
+  clearRec();
+  await verify.init(ctxBase, GUILD);
+  check('panel cũ đã bị xoá -> tạo lại', rec.sends.length === 1);
+  check('panel mới ghi đè id cũ', readData('verify-panel.json').messageId === rec.sends[0].__msgId, JSON.stringify(readData('verify-panel.json')));
 
   // ═══════════════════════════════ TICKET ════════════════════════════════
   console.log('\n=== TICKET ===');
@@ -882,12 +988,14 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   check('nội dung không đổi -> không in dòng Cũ/Mới', !/Cũ:/.test(emb(logSends()[0]).description), emb(logSends()[0]).description);
   check('vẫn ghi log (vì có link nhảy)', logSends().length === 1);
 
+  // Mock GuildMember phải có `guild.id` — sendLog nhận guildId từ đó. Bản cũ
+  // không đọc nên mock thiếu cũng chạy; giờ thiếu là ném TypeError.
   clearRec();
-  await onGAdd(ctxBase, { user: { tag: 'N#1' }, toString: () => '@N', guild: { memberCount: 42 }, user: { tag: 'N#1', displayAvatarURL: () => 'https://x/av.png' } });
+  await onGAdd(ctxBase, { guild: { id: GUILD, memberCount: 42 }, user: { tag: 'N#1', displayAvatarURL: () => 'https://x/av.png' }, toString: () => '@N' });
   check('ghi log vào server', logSends().some((s) => emb(s).title === '📥 Vào server'));
   check('log có số thứ tự thành viên', /Thành viên thứ 42/.test(emb(logSends()[0]).description), JSON.stringify(emb(logSends()[0]).description));
   clearRec();
-  await onGRemove(ctxBase, { user: { tag: 'N#1', displayAvatarURL: () => 'https://x/av.png' }, toString: () => '@N' });
+  await onGRemove(ctxBase, { guild: { id: GUILD, memberCount: 41 }, user: { tag: 'N#1', displayAvatarURL: () => 'https://x/av.png' }, toString: () => '@N' });
   check('ghi log rời server', logSends().some((s) => emb(s).title === '📤 Rời server'));
 
   clearRec();
@@ -895,6 +1003,7 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   // logging.js đọc oldMember.user.username khi nickname rỗng → mock phải có user
   const gmu = (nickname, roleIds = []) => ({
     nickname,
+    guild: { id: GUILD, memberCount: 42 },
     user: { username: 'N' },
     roles: { cache: new Collection(roleIds.map((id) => [id, rm(id)])) },
     toString: () => '@N',
@@ -922,44 +1031,45 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   added.length = 0;
   await onWelcome(ctxBase, {
     user: { tag: 'Mới#1', displayAvatarURL: () => 'https://x/av.png' },
-    guild: { name: 'server g n u r t', memberCount: 77 },
+    guild: { id: GUILD, name: 'server g n u r t', memberCount: 77 },
     toString: () => '@Mới',
     roles: { add: async (r) => added.push(['w', r]) },
   });
-  check('gán role 🌱 cho thành viên mới', added.some((a) => a[1] === ctxBase.env.NEWBIE_ROLE_ID), JSON.stringify(added));
+  check('gán role 🌱 cho thành viên mới', added.some((a) => a[1] === ctxBase.cfg(GUILD).roles.newbie), JSON.stringify(added));
   check('gửi embed chào', rec.sends.some((s) => emb(s).title === '👋 Chào mừng mới!'));
   check('embed nhắc tên server', logSends().some((s) => emb(s).description.includes('server g n u r t')));
   check('embed nhắc số thứ tự', logSends().some((s) => emb(s).description.includes('thành viên thứ **77**')));
 
   clearRec();
   added.length = 0;
-  await onWelcome({ ...ctxBase, env: { ...ctxBase.env, NEWBIE_ROLE_ID: '' } },
-    { user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { name: 's', memberCount: 1 }, toString: () => '@M', roles: { add: async (r) => added.push(r) } });
+  await onWelcome({ ...ctxBase, cfg: () => ({ channels: { welcome: ctxBase.cfg(GUILD).channels.welcome }, roles: {} }) },
+    { user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { id: GUILD, name: 's', memberCount: 1 }, toString: () => '@M', roles: { add: async (r) => added.push(r) } });
   check('thiếu NEWBIE_ROLE_ID -> bỏ qua role', added.length === 0);
   check('vẫn gửi embed chào', rec.sends.length === 1);
   clearRec();
-  await onWelcome({ ...ctxBase, env: { ...ctxBase.env, WELCOME_CHANNEL_ID: '' } },
-    { user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { name: 's', memberCount: 1 }, toString: () => '@M', roles: { add: async () => {} } });
+  await onWelcome({ ...ctxBase, cfg: () => ({ channels: {}, roles: { newbie: ctxBase.cfg(GUILD).roles.newbie } }) },
+    { user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { id: GUILD, name: 's', memberCount: 1 }, toString: () => '@M', roles: { add: async () => {} } });
   check('thiếu WELCOME_CHANNEL_ID -> không gửi', rec.sends.length === 0);
   clearRec();
   await onWelcome(ctxBase, {
-    user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { name: 's', memberCount: 1 }, toString: () => '@M',
+    user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { id: GUILD, name: 's', memberCount: 1 }, toString: () => '@M',
     roles: { add: async () => { throw new Error('Missing Permissions'); } },
   });
   check('gán role lỗi -> vẫn gửi được embed chào', rec.sends.length === 1, String(rec.sends.length));
   clearRec();
   const badSend = { ...ctxBase, client: { channels: { fetch: async () => { throw new Error('Unknown Channel'); } } } };
   await onWelcome(badSend, {
-    user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { name: 's', memberCount: 1 }, toString: () => '@M',
+    user: { tag: 'M#1', displayAvatarURL: () => 'https://x/av.png' }, guild: { id: GUILD, name: 's', memberCount: 1 }, toString: () => '@M',
     roles: { add: async () => {} },
   });
   check('kênh lỗi -> không crash', true);
 
   console.log('\n=== sendLog khi thiếu LOG_CHANNEL_ID ===');
   clearRec();
-  await require(path.join(GUARD, 'src/core/log')).sendLog({ ...ctxBase, env: { ...ctxBase.env, LOG_CHANNEL_ID: '' } }, { __t: 1 });
+  const { sendLog } = require(path.join(GUARD, 'src/core/log'));
+  await sendLog({ ...ctxBase, cfg: () => ({ channels: {}, roles: {} }) }, GUILD, { __t: 1 });
   check('thiếu LOG_CHANNEL_ID -> im lặng, không throw', rec.sends.length === 0);
-  await require(path.join(GUARD, 'src/core/log')).sendLog({ client: { channels: { fetch: async () => { throw new Error('no access'); } } }, env: { LOG_CHANNEL_ID: '1' } }, { __t: 1 });
+  await sendLog({ client: { channels: { fetch: async () => { throw new Error('no access'); } } }, cfg: () => ({ channels: { log: '1' } }) }, GUILD, { __t: 1 });
   check('fetch lỗi -> im lặng, không throw', true);
 
   // ═══════════════════════════════ LEVELS ═══════════════════════════════
@@ -1027,7 +1137,7 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
   console.log('-- XP tin nhắn --');
   resetData('levels.json', {});
   const mkLvMsg = (authorId, content, over = {}) => ({
-    id: '800', guild: { id: GUILD }, content,
+    id: '800', guildId: GUILD, guild: { id: GUILD }, content,
     author: { id: authorId, bot: false },
     channel: { send: async (p) => rec.sends.push(p) },
     ...over,
@@ -1067,26 +1177,29 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
 
   console.log('-- XP voice --');
   const onLvVoice = ev(levels, 'voiceStateUpdate');
+  // guild phải nằm trên state: module lấy `(newState.guild || oldState.guild)?.id`
+  // chứ không đoán qua client.guilds.
+  const mkVs = (id, channelId, over = {}) => ({ id, channelId, guild: { id: GUILD }, ...over });
   resetData('levels.json', {});
-  await onLvVoice(lvCtx, { id: '620', channelId: null }, { id: '620', channelId: 'VC1' });
+  await onLvVoice(lvCtx, mkVs('620', null), mkVs('620', 'VC1'));
   check('vào voice -> ghi voiceStart', readData('levels.json')['620']?.voiceStart > 0, JSON.stringify(readData('levels.json')['620']));
   // 5 phút = 300000ms; xpPer 10 / 5 phút -> perMs = 10/300000
   const realNow = Date.now;
   Date.now = () => realNow() + 5 * 60 * 1000;
-  await onLvVoice(lvCtx, { id: '620', channelId: 'VC1' }, { id: '620', channelId: null });
+  await onLvVoice(lvCtx, mkVs('620', 'VC1'), mkVs('620', null));
   Date.now = realNow;
   check('nghe 5 phút rồi rời -> +10 XP (không cộng đôi)', readData('levels.json')['620']?.xp === 10, String(readData('levels.json')['620']?.xp));
   check('rời voice -> xoá voiceStart', readData('levels.json')['620'].voiceStart === 0);
   check('rời voice -> quỹ voiceAcc về 0', readData('levels.json')['620'].voiceAcc === 0);
-  await onLvVoice(lvCtx, { id: '620', channelId: null }, { id: '620', channelId: 'VC1' });
+  await onLvVoice(lvCtx, mkVs('620', null), mkVs('620', 'VC1'));
   const vs1 = readData('levels.json')['620'].voiceStart;
   Date.now = () => realNow() + 60 * 1000;
   // mute/deafen/stream: channelId KHÔNG đổi — nếu không chặn thì mất XP voice
-  await onLvVoice(lvCtx, { id: '620', channelId: 'VC1', selfMute: false }, { id: '620', channelId: 'VC1', selfMute: true });
+  await onLvVoice(lvCtx, mkVs('620', 'VC1', { selfMute: false }), mkVs('620', 'VC1', { selfMute: true }));
   Date.now = realNow;
   check('mute (cùng kênh) -> KHÔNG reset mốc voiceStart', readData('levels.json')['620'].voiceStart === vs1, String(readData('levels.json')['620'].voiceStart));
   check('mute -> XP không bị cộng sớm', readData('levels.json')['620'].xp === 10, String(readData('levels.json')['620'].xp));
-  await onLvVoice(lvCtx, { id: '621', channelId: 'VC1' }, { id: '621', channelId: 'VC2' });
+  await onLvVoice(lvCtx, mkVs('621', 'VC1'), mkVs('621', 'VC2'));
   check('đổi kênh -> vẫn chốt được (không mất đoạn nghe)', readData('levels.json')['621']?.voiceStart > 0, JSON.stringify(readData('levels.json')['621']));
   check('đổi kênh chưa đủ thời gian -> +0 XP', readData('levels.json')['621']?.xp === 0, String(readData('levels.json')['621']?.xp));
 
@@ -1140,7 +1253,14 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
       const cache = emojiCache || mkEmojiCache();
       guild.emojis = { cache, fetch: async () => cache };
     }
-    return { channels: { fetch: async () => fakeChannel }, guilds: { cache: new Collection(guild ? [[GUILD, guild]] : []) } };
+    // Guild KHÁC nằm TRƯỚC trong Collection: bản single-guild từng đoán
+    // `guilds.cache.values().next().value` và luôn ra đúng vì chỉ có 1 guild.
+    // Ở đân thứ tự cố tình ngược lại để mọi phỏng đoán còn sót fail ngay.
+    const others = [[GUILD2, mkLvGuild(18, [])]];
+    return {
+      channels: { fetch: async (id) => channels.get(id) || fakeChannel },
+      guilds: { cache: new Collection(guild ? [...others, [GUILD, guild]] : [...others]) },
+    };
   };
   const lvRoleCtx = { ...lvCtx, client: mkLvClient(mkLvGuild()) };
 
@@ -1334,11 +1454,11 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
       return emojiGuild.emojis.cache;
     },
   };
-  await levels.init({ ...lvRoleCtx, client: mkLvClient(emojiGuild) });
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(emojiGuild) }, GUILD);
   check('init gọi guild.emojis.fetch()', emojiFetchCalls.length === 1, JSON.stringify(emojiFetchCalls));
   check('sau init thì emoji có trong cache', emojiGuild.emojis.cache.size === RANKS.length, String(emojiGuild.emojis.cache.size));
 
-  await levels.init(lvRoleCtx);
+  await levels.init(lvRoleCtx, GUILD);
   check('init role hợp lệ -> không throw', true);
 
   // emojis.fetch() lỗi -> init vẫn chạy tiếp, chỉ warn (không chặn phần role).
@@ -1349,13 +1469,146 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
       throw new Error('Missing Access');
     },
   };
-  await levels.init({ ...lvRoleCtx, client: mkLvClient(throwEmojiGuild) });
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(throwEmojiGuild) }, GUILD);
   check('emojis.fetch lỗi -> init không throw', true);
 
-  await levels.init({ ...lvRoleCtx, client: mkLvClient(null) });
+  await levels.init({ ...lvRoleCtx, client: mkLvClient(null) }, GUILD);
   check('init không có guild -> không throw', true);
-  await levels.init(noRankCtx);
+  await levels.init(noRankCtx, GUILD);
   check('init roles rỗng -> không throw', true);
+
+  // ═══════════════════ CÔ LẬP 2 GUILD (lớp bug bản single-guild không có) ═════
+  // Mọi test phía trên chạy trên MỘT guild — nghĩa là bất kỳ chỗ nào đoán guild
+  // "đầu tiên trong cache" đều pass. Ở đây guild SAI cố tình nằm TRƯỚC trong
+  // Collection: mọi `guilds.cache.values().next().value` còn sót sẽ chọn nhầm nó
+  // và fail ngay.
+  console.log('\n=== CÔ LẬP 2 GUILD ===');
+    const CHAN2 = '900000000000000003';
+  channels.set(CHAN2, mkChannel(CHAN2, 'chat-server-2'));
+
+  const mkG2Msg = (authorId, content) => ({
+    id: 'g2-' + authorId, guildId: GUILD2, guild: { id: GUILD2 }, content,
+    author: { id: authorId, bot: false, toString: () => '@' + authorId },
+    channel: channels.get(CHAN2),
+    delete: async () => {},
+  });
+
+  // XP cùng một userId ở 2 server phải tách bể.
+  store.write(GUILD, 'levels', { shared: { xp: 500, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  store.write(GUILD2, 'levels', { shared: { xp: 0, lastMsg: 0, lastReact: 0, voiceStart: 0, voiceAcc: 0 } });
+  await onLvMsg({ ...lvCtx, config: { ...lvCtx.config, levels: { ...lvCtx.config.levels, cooldownMs: 0 } } }, mkG2Msg('shared', 'chào server 2'));
+  check('XP 2 server cùng userId -> tách bể',
+    store.read(GUILD, 'levels').shared.xp === 500 && store.read(GUILD2, 'levels').shared.xp === 1,
+    `A=${store.read(GUILD, 'levels').shared.xp} B=${store.read(GUILD2, 'levels').shared.xp}`);
+
+  // Strike automod cũng phải tách: 1 lần vi phạm ở server A không làm người đó
+  // bị timeout ngay ở server B.
+  clearRec();
+  const am2 = { ...ctxBase, config: { ...ctxBase.config, automod: { ...ctxBase.config.automod, spam: { messages: 99, windowMs: 5000, timeoutSeconds: 300 } } } };
+  await onMsg(am2, mkMsg('striker', 'fuck'));
+  const m2 = mkMsg('striker', 'fuck');
+  m2.guildId = GUILD2;
+  m2.guild = { id: GUILD2 };
+  m2.channel = channels.get(CHAN2);
+  await onMsg(am2, m2);
+  check('strike server B tính riêng -> chưa timeout', m2.__timedOut.length === 0, JSON.stringify(m2.__timedOut));
+
+  // Tags: cùng tên tag ở 2 server là 2 nội dung khác nhau. Interaction phải
+  // mang `guildId` của server 2 — bản cũ đọc store phẳng nên tag tạo ở đây sẽ
+  // xuất hiện ở `/tag list` của server 1.
+  const g2Iface = (over) => ({ guildId: GUILD2, guild: { id: GUILD2, name: 'server 2', ownerId: '900000000000000009' }, ...over });
+  store.write(GUILD, 'tags', {});
+  store.write(GUILD2, 'tags', {});
+  const tagG1 = sub('tag', 'create', { name: 'rule', content: 'nội quy server 1' },
+    { guildId: GUILD, memberPermissions: { has: () => true } });
+  const tagG2 = sub('tag', 'create', { name: 'rule', content: 'nội quy server 2' },
+    g2Iface({ memberPermissions: { has: () => true } }));
+  await tags.handleInteraction(tagG1.i, ctxBase);
+  await tags.handleInteraction(tagG2.i, ctxBase);
+  check('cùng tên tag 2 server -> 2 nội dung khác nhau',
+    store.read(GUILD, 'tags').rule === 'nội quy server 1' &&
+    store.read(GUILD2, 'tags').rule === 'nội quy server 2',
+    `A=${store.read(GUILD, 'tags').rule} B=${store.read(GUILD2, 'tags').rule}`);
+
+  // `/tag list` ở server 2 chỉ thấy tag của server 2 — đây mới là lỗi thật
+  // (bản single-guild liệt kê MỌI tag trong file chung).
+  clearRec();
+  const listG2 = sub('tag', 'list', {}, g2Iface());
+  await tags.handleInteraction(listG2.i, ctxBase);
+  const listDesc = emb(listG2.captured).description;
+  check('/tag list ở server 2 không lộ tag server 1',
+    listDesc.includes('`rule`') && store.read(GUILD2, 'tags').rule === 'nội quy server 2',
+    listDesc);
+
+  // Warns: chạy `/warn` thật ở server 1 rồi `/warn` lại ở server 2 — server 2
+  // phải báo tổng 1, không phải 2 (bản single-guild đếm chung).
+  const g2GuildMock = (mePos = 50) => ({
+    id: GUILD2, name: 'server 2', ownerId: '900000000000000009',
+    members: { me: { id: BOT, roles: { highest: { position: mePos } } } },
+    bans: [],
+  });
+  const warnAt = async (guildId, guildMock, reason) => {
+    store.write(guildId, 'warns', {});
+    const target = mkMember('shared-user', 10);
+    const it = sub('warn', 'warn', { user: 'shared-user', reason },
+      g2Iface({ guild: guildMock, memberPermissions: { has: () => true } }));
+    it.i.guildId = guildId;
+    it.i.guild = guildMock;
+    it.i.member = { roles: { cache: new Collection() } };
+    it.i.options.getMember = () => target;
+    it.i.options.getUser = () => target.user;
+    await moderation.handleInteraction(it.i, ctxBase);
+    return it.edited || '';
+  };
+  const w1 = await warnAt(GUILD, guildMock(), 'lý do A');
+  const w2 = await warnAt(GUILD2, g2GuildMock(), 'lý do B');
+  check('warn ở server 1 -> tổng 1', /tổng \*\*1\*\*/.test(w1), w1);
+  check('warn ở server 2 -> tổng 1 (KHÔNG tính dồn server 1)', /tổng \*\*1\*\*/.test(w2), w2);
+  check('warn lưu 2 file riêng',
+    store.read(GUILD, 'warns')['shared-user'].length === 1 &&
+    store.read(GUILD2, 'warns')['shared-user'].length === 1,
+    JSON.stringify([store.read(GUILD, 'warns')['shared-user'], store.read(GUILD2, 'warns')['shared-user']]));
+
+  // Hệ quả bắt buộc của việc tách store: 2 guild không dùng chung 1 file.
+  check('store tách đường dẫn theo guild',
+    store.filePath(GUILD, 'warns') !== store.filePath(GUILD2, 'warns'),
+    `${store.filePath(GUILD, 'warns')} vs ${store.filePath(GUILD2, 'warns')}`);
+
+  // sendLog đã theo guild (Phase 4): `log.js` đọc `ctx.cfg(guildId).channels.log`.
+  // Guild 2 chưa có `config/guilds/<GUILD2>.json` nên `cfg` rỗng → KHÔNG được
+  // gửi về kênh log của server 1 (kênh đó thuộc guild khác, fetch sẽ throw
+  // "Cannot send message to this channel" hoặc rơi log nhầm chỗ).
+  clearRec();
+  await sendLog(ctxBase, GUILD2, { title: 'log server 2' });
+  check('sendLog server chưa cấu hình -> im lặng, không lẩn sang kênh server 1',
+    sentTo(ctxBase.cfg(GUILD).channels.log).length === 0 && sentTo(CHAN2).length === 0,
+    `chung=${sentTo(ctxBase.cfg(GUILD).channels.log).length} g2=${sentTo(CHAN2).length}`);
+
+  // Còn server CÓ config thì log phải về đúng kênh của server đó.
+  const CFG2 = '900000000000000002';
+  const LOG2 = '900000000000000004';
+  guildConfig.clear();
+  const cfgDir = path.dirname(guildConfig.GUILD_DIR);
+  fs.mkdirSync(cfgDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(guildConfig.GUILD_DIR, `${CFG2}.json`),
+    JSON.stringify({ schema: 2, guildId: CFG2, channels: { log: LOG2 }, roles: {} })
+  );
+  channels.set(LOG2, mkChannel(LOG2, 'chat-log-server-2'));
+  clearRec();
+  await sendLog(ctxBase, CFG2, { title: 'log server có config' });
+  check('sendLog server có config -> về đúng kênh log riêng',
+    sentTo(LOG2).length === 1 && sentTo(ctxBase.cfg(GUILD).channels.log).length === 0,
+    `g2log=${sentTo(LOG2).length} g1=${sentTo(ctxBase.cfg(GUILD).channels.log).length}`);
+  guildConfig.clear();
+  fs.rmSync(path.join(guildConfig.GUILD_DIR, `${CFG2}.json`), { force: true });
+
+  // Guild chưa cấu hình -> KHÔNG được đăng panel vào kênh nào.
+  // (Phase 5 thêm cổng này ở lifecycle; ở đây verify.init vẫn cần env riêng.)
+  clearRec();
+  store.write(GUILD2, 'verify-panel', null);
+  await verify.init({ ...ctxBase, cfg: (g) => (g === GUILD2 ? { channels: {}, roles: {} } : ctxBase.cfg(g)) }, GUILD2);
+  check('guild chưa cấu hình -> KHÔNG đăng panel', rec.sends.length === 0, String(rec.sends.length));
 
   console.log(`\n${'='.repeat(46)}\nPASS: ${pass}   FAIL: ${fail}\n`);
   restore();

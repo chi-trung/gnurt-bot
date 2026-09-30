@@ -1,19 +1,38 @@
 // Kiểm thử logic module suggestions + starboard bằng mock interaction.
 // KHÔNG thay đổi behavior production — chỉ gọi handleInteraction với dữ liệu giả
-// rồi kiểm tra kết quả trả về. suggestions.json được snapshot & khôi phục.
+// rồi kiểm tra kết quả trả về.
+//
+// Suite này KHÔNG chạm `src/data/` nữa: `GUARDIAN_DATA_DIR` trỏ vào thư mục tạm
+// và mọi đọc/ghi đi qua `core/store`. Trước đây nó đọc/ghi thẳng
+// `src/data/suggestions.json` — cùng lớp bug đã từng xoá `rr.json` thật.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
 const GUARD = 'C:/Users/Gnurt/Desktop/bot-discord/bots/guardian';
-const { MessageFlags } = require(path.join(GUARD, 'node_modules/discord.js'));
-const SUG = require(path.join(GUARD, 'src/modules/suggestions'));
-const SUG_FILE = path.join(GUARD, 'src/data/suggestions.json');
+process.env.GUARDIAN_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-sug-'));
+process.env.GUARDIAN_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'guardian-sug-cfg-'));
 
-const backup = fs.existsSync(SUG_FILE) ? fs.readFileSync(SUG_FILE, 'utf8') : null;
+const { MessageFlags } = require(path.join(GUARD, 'node_modules/discord.js'));
+const store = require(path.join(GUARD, 'src/core/store'));
+const guildConfig = require(path.join(GUARD, 'src/core/guildconfig'));
+const SUG = require(path.join(GUARD, 'src/modules/suggestions'));
+
+const GUILD = '1554742286598803526';
+const CHAN = '1554782911142694934'; // SUGGESTIONS_CHANNEL_ID
+const resetData = (obj) => store.write(GUILD, 'suggestions', obj);
+// JSON round-trip để lấy BẢN SAO, không phải object cache mà store trả về. Nếu đọc
+// thẳng object cache thì assert nhìn thấy cả mutation của module — test sẽ pass
+// dù module ghi sai. Bản sao buộc test kiểm đúng trạng thái đã lưu.
+const readData = () => JSON.parse(JSON.stringify(store.read(GUILD, 'suggestions')));
+
+// Dọn thư mục tạm khi kết thúc. Không còn backup/restore vì dữ liệu thật không
+// nằm trong đây nữa.
 const restore = () => {
-  if (backup === null) fs.rmSync(SUG_FILE, { force: true });
-  else fs.writeFileSync(SUG_FILE, backup);
+  for (const dir of [process.env.GUARDIAN_DATA_DIR, process.env.GUARDIAN_CONFIG_DIR]) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); }
+    catch { /* thư mục tạm, không ghi được thì cũng không sao */ }
+  }
 };
 
 let pass = 0;
@@ -40,11 +59,12 @@ function emb(p, i = 0) {
 const sent = { lastSend: null, lastEdit: null };
 
 const fakeChannel = {
+  id: CHAN,
   send: async (p) => {
     sent.lastSend = p;
     return {
       id: '1554782911142694935',
-      url: 'https://discord.com/channels/1554742286598803526/1554782911142694934/1554782911142694935',
+      url: `https://discord.com/channels/${GUILD}/${CHAN}/1554782911142694935`,
       edit: async (q) => { sent.lastEdit = q; },
     };
   },
@@ -52,10 +72,23 @@ const fakeChannel = {
     fetch: async () => ({ edit: async (p) => { sent.lastEdit = p; } }),
   },
 };
+// `ctx.cfg(guildId)` — module đọc cấu hình theo guild, không đọc `ctx.env`.
+// Dùng loader THẬT (`core/guildconfig`) với `GUARDIAN_CONFIG_DIR` trỏ thư mục
+// tạm, và tự viết file config cho GUILD ở đó (module đọc `channels.suggestions`
+// từ file này — `fromEnv()` không chạy vì `process.env.GUILD_ID` không set).
+fs.writeFileSync(
+  path.join(guildConfig.GUILD_DIR, `${GUILD}.json`),
+  JSON.stringify({
+    schema: 2,
+    guildId: GUILD,
+    channels: { suggestions: CHAN },
+    roles: { admin: ['ROLE_ADMIN'] },
+  })
+);
 const ctx = {
   client: { channels: { fetch: async () => fakeChannel } },
   config: { modules: { suggestions: true } },
-  env: { SUGGESTIONS_CHANNEL_ID: '1554782911142694934', ADMIN_ROLE_ID: 'ROLE_ADMIN', LOG_CHANNEL_ID: null },
+  cfg: (guildId) => guildConfig.load(guildId),
 };
 
 function mkIface(over = {}) {
@@ -65,7 +98,10 @@ function mkIface(over = {}) {
     isButton: () => false,
     isAutocomplete: () => false,
     commandName: 'suggest',
-    guild: { id: '1554742286598803526' },
+    // `suggestions.js` đọc `interaction.guildId` (không phải `guild.id`) — thiếu
+    // field này thì `store` ném `guildId không hợp lệ: undefined`.
+    guildId: GUILD,
+    guild: { id: GUILD, channels: { cache: new Map([[CHAN, fakeChannel]]) } },
     user: { id: 'U1', tag: 'Tester#0001', displayAvatarURL: () => 'https://x/av.png' },
     member: { roles: { cache: new Map() } },
     memberPermissions: { has: () => false },
@@ -90,7 +126,7 @@ function sub(name, extraOpts = {}, over = {}) {
 
 (async () => {
   console.log('\n=== 1. /suggest list — kho rỗng ===');
-  fs.writeFileSync(SUG_FILE, JSON.stringify({}));
+  resetData({});
   let t = sub('list');
   check('trả về true', (await SUG.handleInteraction(t.i, ctx)) === true);
   // discord.js 14.27 đã bỏ key `ephemeral` (deprecated) → phải dùng flags bitmask.
@@ -102,7 +138,8 @@ function sub(name, extraOpts = {}, over = {}) {
   t = sub('create', { content: 'Nên thêm kênh nhạc' });
   check('trả về true', (await SUG.handleInteraction(t.i, ctx)) === true);
   check('deferReply được gọi', true);
-  let db = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
+  let db = readData();
+
   const newId = Object.keys(db)[0];
   check('message id là số (snowflake)', /^\d+$/.test(newId), newId);
   check('ghi 1 record vào DB', Object.keys(db).length === 1, JSON.stringify(Object.keys(db)));
@@ -115,7 +152,7 @@ function sub(name, extraOpts = {}, over = {}) {
   console.log('\n=== 3. Bấm 👍 (bỏ phiếu đồng ý) ===');
   t = mkIface({ isButton: () => true, customId: 'suggest:up', message: { id: newId } });
   check('trả về true', (await SUG.handleInteraction(t.i, ctx)) === true);
-  db = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
+  db = readData();
   check('up=1', db[newId].up.length === 1, JSON.stringify(db[newId].up));
   const f0 = emb(t.captured).footer?.text ?? '';
   check('footer hiện 👍 1', f0.includes('👍 1'), f0);
@@ -123,7 +160,7 @@ function sub(name, extraOpts = {}, over = {}) {
   console.log('\n=== 4. Bấm 👍 lần 2 (bỏ phiếu) ===');
   t = mkIface({ isButton: () => true, customId: 'suggest:up', message: { id: newId } });
   await SUG.handleInteraction(t.i, ctx);
-  db = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
+  db = readData();
   check('up=0 sau khi bỏ', db[newId].up.length === 0, JSON.stringify(db[newId].up));
 
   console.log('\n=== 5. Bấm 👍 rồi 👎 (đổi phe, không double-count) ===');
@@ -131,7 +168,7 @@ function sub(name, extraOpts = {}, over = {}) {
   await SUG.handleInteraction(a.i, ctx);
   a = mkIface({ isButton: () => true, customId: 'suggest:down', message: { id: newId } });
   await SUG.handleInteraction(a.i, ctx);
-  db = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
+  db = readData();
   check('up=0', db[newId].up.length === 0, JSON.stringify(db[newId].up));
   check('down=1', db[newId].down.length === 1, JSON.stringify(db[newId].down));
 
@@ -165,7 +202,7 @@ function sub(name, extraOpts = {}, over = {}) {
     { memberPermissions: { has: (p) => true } }
   );
   check('trả về true', (await SUG.handleInteraction(t.i, ctx)) === true);
-  db = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
+  db = readData();
   check('status=accepted', db[newId].status === 'accepted', db[newId].status);
   check('ghi decidedBy', db[newId].decidedBy === 'Tester#0001', String(db[newId].decidedBy));
   // decide gọi channel.messages.fetch().edit() — embed nằm ở đó, không phải reply
@@ -181,11 +218,11 @@ function sub(name, extraOpts = {}, over = {}) {
   t = mkIface({ isButton: () => true, customId: 'ticket:create', message: { id: newId } });
   check('trả về false', (await SUG.handleInteraction(t.i, ctx)) === false);
 
-  console.log('\n=== 13. Thiếu SUGGESTIONS_CHANNEL_ID ===');
-  const ctxNoCh = { ...ctx, env: { ...ctx.env, SUGGESTIONS_CHANNEL_ID: '' } };
+  console.log('\n=== 13. Guild chưa cấu hình kênh gợi ý ===');
+  const ctxNoCh = { ...ctx, cfg: () => ({ channels: {}, roles: {} }) };
   t = sub('create', { content: 'abc' });
   await SUG.handleInteraction(t.i, ctxNoCh);
-  check('báo cấu hình thiếu', /SUGGESTIONS_CHANNEL_ID/.test(t.captured?.content || ''), t.captured?.content);
+  check('báo cấu hình thiếu', /chưa cấu hình/i.test(t.captured?.content || ''), t.captured?.content);
 
   console.log('\n=== 14. Nội dung rỗng ===');
   t = sub('create', { content: '   ' });

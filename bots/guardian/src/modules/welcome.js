@@ -7,19 +7,23 @@ module.exports = {
     {
       name: Events.GuildMemberAdd,
       handler: async (ctx, member) => {
-        const { NEWBIE_ROLE_ID, WELCOME_CHANNEL_ID } = ctx.env;
+        // Cấu hình theo guild: server thứ hai có role/kênh riêng, không dùng
+        // chung với server gốc.
+        const cfg = ctx.cfg(member.guild.id);
+        const newbieRoleId = cfg.roles.newbie;
+        const welcomeChannelId = cfg.channels.welcome;
 
-        if (NEWBIE_ROLE_ID) {
+        if (newbieRoleId) {
           try {
-            await member.roles.add(NEWBIE_ROLE_ID);
+            await member.roles.add(newbieRoleId);
           } catch (err) {
             console.error(`Không auto-role được ${member.user.tag}:`, err.message);
           }
         }
 
-        if (WELCOME_CHANNEL_ID) {
+        if (welcomeChannelId) {
           try {
-            const channel = await ctx.client.channels.fetch(WELCOME_CHANNEL_ID);
+            const channel = await ctx.client.channels.fetch(welcomeChannelId);
             const embed = new EmbedBuilder()
               .setColor(0x2ecc71)
               .setTitle('👋 Chào mừng mới!')

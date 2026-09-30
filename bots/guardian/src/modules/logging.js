@@ -15,6 +15,7 @@ module.exports = {
         if (message.attachments.size) parts.push(`Tệp: ${message.attachments.size} attachment(s)`);
         await sendLog(
           ctx,
+          message.guild.id,
           new EmbedBuilder()
             .setColor(0xe74c3c)
             .setTitle('🗑️ Tin nhắn bị xóa')
@@ -35,6 +36,7 @@ module.exports = {
         parts.push(`[Nhảy tới](${newMessage.url})`);
         await sendLog(
           ctx,
+          newMessage.guild.id,
           new EmbedBuilder()
             .setColor(0xf1c40f)
             .setTitle('✏️ Tin nhắn bị sửa')
@@ -48,6 +50,7 @@ module.exports = {
       handler: async (ctx, member) => {
         await sendLog(
           ctx,
+          member.guild.id,
           new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle('📥 Vào server')
@@ -62,6 +65,7 @@ module.exports = {
       handler: async (ctx, member) => {
         await sendLog(
           ctx,
+          member.guild.id,
           new EmbedBuilder()
             .setColor(0xe74c3c)
             .setTitle('📤 Rời server')
@@ -90,6 +94,7 @@ module.exports = {
         if (!changes.length) return;
         await sendLog(
           ctx,
+          newMember.guild.id,
           new EmbedBuilder()
             .setColor(0x3498db)
             .setTitle('👤 Thành viên thay đổi')

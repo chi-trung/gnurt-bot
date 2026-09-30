@@ -1,9 +1,11 @@
 // Suggestions: thành viên gửi ý kiến → embed trong #góp-ý + nút 👍/👎.
 // Staff duyệt/từ chối bằng `/suggest decide <link> <trạng thái>`.
-// Storage: src/data/suggestions.json { [id tin góp-ý]: { authorId, content, channelId,
-//   up: [userId], down: [userId], status, createdAt, decidedBy, decidedAt } }.
-const fs = require('fs');
-const path = require('path');
+// Storage: core/store → data/guilds/<guildId>/suggestions.json
+//   { [id tin góp-ý]: { authorId, content, channelId, up[], down[], status, ... } }
+//
+// Mỗi record vẫn lưu `guildId` (dùng để dựng link jump) nhưng khoá store đã tách
+// sẵn theo guild. `/suggest list` trước đây liệt kê MỌI record trong file nên
+// ở server thứ hai sẽ lộ gợi ý của server gốc.
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -14,9 +16,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const SUG_FILE = path.join(DATA_DIR, 'suggestions.json');
+const store = require('../core/store');
 
 const STATUS = {
   open: { label: '🟡 Đang xem xét', color: 0xf1c40f },
@@ -24,19 +24,6 @@ const STATUS = {
   rejected: { label: '🔴 Đã từ chối', color: 0xe74c3c },
   implemented: { label: '🔵 Đã triển khai', color: 0x3498db },
 };
-
-function loadSuggestions() {
-  try {
-    const j = JSON.parse(fs.readFileSync(SUG_FILE, 'utf8'));
-    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
-  } catch {
-    return {};
-  }
-}
-function saveSuggestions(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(SUG_FILE, JSON.stringify(data, null, 2));
-}
 
 function voteRow() {
   return new ActionRowBuilder().addComponents(
@@ -101,10 +88,10 @@ const suggestCommand = new SlashCommandBuilder()
       )
   );
 
-function isStaff(interaction, ctx) {
-  const adminId = ctx.env.ADMIN_ROLE_ID;
-  if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return true;
-  return Boolean(adminId && interaction.member?.roles?.cache?.has(adminId));
+// Staff = người có quyền Discord, không phụ thuộc role trong config: quy mô
+// kiểm soát đến từ role Discord sẵn có (Administrator/ManageGuild).
+function isStaff(interaction) {
+  return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
 }
 
 /** Rút id message ra từ link: https://discord.com/channels/<guild>/<channel>/<message> */
@@ -114,10 +101,10 @@ function parseMessageId(link) {
 }
 
 async function createSuggestion(interaction, ctx) {
-  const channelId = ctx.env.SUGGESTIONS_CHANNEL_ID;
+  const channelId = ctx.cfg(interaction.guildId).channels.suggestions;
   if (!channelId) {
     await interaction.reply({
-      content: '⚠️ Chưa cấu hình `SUGGESTIONS_CHANNEL_ID` — module chưa hoạt động.',
+      content: '⚠️ Chưa cấu hình kênh gợi ý cho server này — module chưa hoạt động.',
       flags: MessageFlags.Ephemeral,
     });
     return true;
@@ -152,14 +139,15 @@ async function createSuggestion(interaction, ctx) {
   // embed lúc gửi chưa có id thật → sửa lại 1 lần cho link jump đúng
   await sent.edit({ embeds: [buildEmbed(item, sent.id)] });
 
-  const all = loadSuggestions();
-  all[sent.id] = item;
-  saveSuggestions(all);
+  await store.updateAsync(interaction.guildId, 'suggestions', (all) => {
+    all[sent.id] = item;
+  });
 
   await interaction.editReply(`✅ Đã gửi gợi ý: ${sent.url}`);
 
   sendLog(
     ctx,
+    interaction.guildId,
     new EmbedBuilder()
       .setColor(0x3498db)
       .setTitle('💡 Gợi ý mới')
@@ -170,8 +158,7 @@ async function createSuggestion(interaction, ctx) {
 }
 
 async function listSuggestions(interaction) {
-  const all = loadSuggestions();
-  const open = Object.values(all)
+  const open = Object.values(store.read(interaction.guildId, 'suggestions'))
     .filter((s) => s.status === 'open')
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 15);
@@ -200,7 +187,7 @@ async function listSuggestions(interaction) {
 }
 
 async function decideSuggestion(interaction, ctx) {
-  if (!isStaff(interaction, ctx)) {
+  if (!isStaff(interaction)) {
     await interaction.reply({ content: 'Chỉ staff mới quyết định được gợi ý.', flags: MessageFlags.Ephemeral });
     return true;
   }
@@ -214,10 +201,21 @@ async function decideSuggestion(interaction, ctx) {
     return true;
   }
 
-  const all = loadSuggestions();
+  const all = store.read(interaction.guildId, 'suggestions');
   const item = all[messageId];
   if (!item) {
     await interaction.reply({ content: 'Không tìm thấy gợi ý này trong database.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  // Record lưu `channelId` từ lúc tạo. Nếu server đã đổi tên/kênh bị xoá thì
+  // `channels.fetch` ném — hoặc tệ hơn, trỏ sang kênh của server khác. Chặn
+  // trước khi đụng record.
+  const ch = interaction.guild.channels.cache.get(item.channelId);
+  if (!ch) {
+    await interaction.reply({
+      content: 'Kênh chứa gợi ý này không còn trong server (đã xoá hoặc đổi chế độ xem) — cần cập nhật lại.',
+      flags: MessageFlags.Ephemeral,
+    });
     return true;
   }
 
@@ -225,7 +223,9 @@ async function decideSuggestion(interaction, ctx) {
   item.status = next;
   item.decidedBy = next === 'open' ? null : interaction.user.tag;
   item.decidedAt = next === 'open' ? null : new Date().toISOString();
-  saveSuggestions(all);
+  await store.updateAsync(interaction.guildId, 'suggestions', (a) => {
+    a[messageId] = item;
+  });
 
   try {
     const channel = await ctx.client.channels.fetch(item.channelId);
@@ -243,6 +243,7 @@ async function decideSuggestion(interaction, ctx) {
   if (next !== 'open') {
     sendLog(
       ctx,
+      interaction.guildId,
       new EmbedBuilder()
         .setColor(STATUS[next].color)
         .setTitle('💡 Gợi ý được xử lý')
@@ -258,8 +259,22 @@ async function decideSuggestion(interaction, ctx) {
 
 async function handleVote(interaction, ctx) {
   const add = interaction.customId === 'suggest:up';
-  const all = loadSuggestions();
-  const item = all[interaction.message.id];
+  const messageId = interaction.message.id;
+  const userId = interaction.user.id;
+
+  // Bấm nút trên embed cũ ở server đã rời đi: interaction vẫn có guildId nên
+  // vẫn tìm thấy store — nhưng record đó không thuộc server này nữa.
+  const item = await store.updateAsync(interaction.guildId, 'suggestions', (all) => {
+    const it = all[messageId];
+    if (!it) return null;
+    const other = add ? 'down' : 'up';
+    const side = add ? 'up' : 'down';
+    const wasIn = it[side].includes(userId);
+    it[other] = it[other].filter((id) => id !== userId);
+    if (wasIn) it[side] = it[side].filter((id) => id !== userId);
+    else it[side].push(userId);
+    return it;
+  });
   if (!item) {
     await interaction.reply({
       content: 'Gợi ý này không còn trong database.',
@@ -268,16 +283,7 @@ async function handleVote(interaction, ctx) {
     return true;
   }
 
-  const other = add ? 'down' : 'up';
-  const wasIn = item[add ? 'up' : 'down'].includes(interaction.user.id);
-
-  item[other] = item[other].filter((id) => id !== interaction.user.id);
-  if (wasIn) item[add ? 'up' : 'down'] = item[add ? 'up' : 'down'].filter((id) => id !== interaction.user.id);
-  else item[add ? 'up' : 'down'].push(interaction.user.id);
-
-  saveSuggestions(all);
-
-  const embed = buildEmbed(item, interaction.message.id);
+  const embed = buildEmbed(item, messageId);
   const row = voteRow();
   await interaction.update({ embeds: [embed], components: [row] });
   return true;

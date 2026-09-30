@@ -5,27 +5,14 @@ require('dotenv').config();
 
 const { Client, GatewayIntentBits, Partials, Events, REST, Routes, MessageFlags } = require('discord.js');
 const configStore = require('./config');
+const guildConfig = require('./core/guildconfig');
 
-const {
-  DISCORD_TOKEN,
-  CLIENT_ID,
-  GUILD_ID,
-  WELCOME_CHANNEL_ID,
-  NEWBIE_ROLE_ID,
-  TICKET_CHANNEL_ID,
-  LOG_CHANNEL_ID,
-} = process.env;
+const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-// Validate biến bắt buộc sớm — fail-fast thay vì login rồi mới lộ lỗi thiếu config
-const required = [
-  'DISCORD_TOKEN',
-  'CLIENT_ID',
-  'GUILD_ID',
-  'WELCOME_CHANNEL_ID',
-  'NEWBIE_ROLE_ID',
-  'TICKET_CHANNEL_ID',
-  'LOG_CHANNEL_ID',
-];
+// Validate biến bắt buộc sớm — fail-fast thay vì login rồi mới lộ lỗi thiếu config.
+// Sau khi migrate, các `*_CHANNEL_ID`/`*_ROLE_ID` nằm trong `config/guilds/<id>.json`
+// chứ không phải `.env` → chỉ còn 3 biến này là bắt buộc ở mọi guild.
+const required = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID'];
 const missing = required.filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`Thiếu biến môi trường: ${missing.join(', ')} (kiểm tra file .env)`);
@@ -80,7 +67,9 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction], // reaction/message không cache vẫn xử lý được
 });
 
-const ctx = { client, config, env: process.env };
+// `cfg(guildId)` = config riêng của server đó. Module CHỈ dùng `ctx.cfg(...)`,
+// không đọc `ctx.env` — `env` giữ lại cho code đọc bot-wide (token, client id).
+const ctx = { client, config, env: process.env, cfg: guildConfig.load };
 
 // --- events ---
 for (const m of loaded) {
@@ -121,21 +110,41 @@ client.once(Events.ClientReady, async (c) => {
 
   const commands = loaded.flatMap((m) => (m.commands || []).map((cmd) => cmd.toJSON()));
 
+  // Đăng ký lệnh GLOBAL (`applicationCommands`), không phải theo guild.
+  //
+  // Guild-scoped có lệnh hiện nhanh hơn (~1s vs ~1h) nhưng bị Discord giới hạn
+  // 100 guild — vượt ngưỡng là phải đổi lại kiến trúc giữa chừng rồi xoá lệnh ở
+  // 100 guild cũ. Global có trần 2000 guild nên không có ngõ cụt. Đổi lại độ
+  // trễ ~1h, và ta chỉ trả độ trễ đó khi lệnh thay đổi LÚC bot vừa vào server
+  // — lệnh của bot gần như không đổi nên gần như không phải chịu.
+  //
+  // LÁCH KHI DEV SỬA LỆNH (độ trễ ~1h rất khó chịu): PUT tạm vào guild nhà,
+  // `client.guilds.cache.get(GUILD_ID).id`, để test tức thì. NHƯNG phải bỏ dòng
+  // đó trước khi deploy thật — để cả hai cùng lúc thì lệnh guild-scoped của
+  // server nhà sẽ CHE lệnh global ở chính server đó.
+  const rest = new REST().setToken(DISCORD_TOKEN);
   try {
-    const rest = new REST().setToken(DISCORD_TOKEN);
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log(`Đã đăng ký ${commands.length} lệnh: ${commands.map((x) => '/' + x.name).join(', ')}`);
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    console.log(`Đã đăng ký ${commands.length} lệnh (global)`);
   } catch (err) {
     console.error('Lỗi đăng ký slash command:', err);
   }
+  if (commands.length) {
+    console.log(`Danh sách lệnh: ${commands.map((x) => '/' + x.name).join(', ')}`);
+  }
 
-  for (const m of loaded) {
-    if (!m.init) continue;
-    try {
-      await m.init(ctx);
-      console.log(`Module ${m.name}: init xong`);
-    } catch (err) {
-      console.error(`Lỗi init module ${m.name}:`, err);
+  // Mỗi guild một vòng init riêng: module đọc state theo guildId nên `init`
+  // phải biết đang khởi tạo cho server nào. Module lỗi ở server này không
+  // được làm hỏng server khác — vòng lặp bọc try/catch từng guild.
+  for (const guild of c.guilds.cache.values()) {
+    for (const m of loaded) {
+      if (!m.init) continue;
+      try {
+        await m.init(ctx, guild.id);
+        console.log(`Module ${m.name} [${guild.id}]: init xong`);
+      } catch (err) {
+        console.error(`Lỗi init module ${m.name} [${guild.id}]:`, err);
+      }
     }
   }
 });
