@@ -111,7 +111,11 @@ async function handleInteraction(interaction, ctx) {
     return true;
   }
 
-  const name = interaction.options.getString('name').toLowerCase().trim();
+  // `list` không có option `name`; subcommand lạ cũng có thể tới đây. Guard trước
+  // khi .toLowerCase() để trả về false (bỏ qua interaction) thay vì throw.
+  const rawName = interaction.options.getString('name');
+  if (rawName === null || rawName === undefined) return false;
+  const name = rawName.toLowerCase().trim();
 
   if (sub === 'create') {
     if (!NAME_RE.test(name)) {

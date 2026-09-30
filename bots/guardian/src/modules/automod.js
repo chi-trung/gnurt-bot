@@ -4,7 +4,11 @@
 const { Events, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { sendLog } = require('../core/log');
 
-const INVITE_RE = /(discord\.(gg|io|me|com\/invite|app\/invite))/i;
+// Chỉ khớp link mời THẬT của Discord, và chỉ khi nó là ĐẦU TÊN MIỀN của URL.
+// Nếu dò "discord.gg" trong text thuần thì "https://example.com/discord.gg" hoặc
+// "a.discord.gg" sẽ bị khớp nhầm (trước "discord" là "/" hoặc "." — đều không phải
+// word char) → tin vô hại bị xoá. Vì vậy bắt buộc có protocol:// phía trước.
+const INVITE_RE = /\bhttps?:\/\/(?:www\.)?discord\.(?:gg|io|me)\/\S+|\bhttps?:\/\/(?:www\.)?discord(?:app)?\.com\/invite\/\S+/i;
 
 // strike counting (in-memory, reset khi bot restart)
 const strikes = new Map(); // userId -> count
