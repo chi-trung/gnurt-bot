@@ -10,7 +10,7 @@ const path = require('path');
 
 const GUARD = 'C:/Users/Gnurt/Desktop/bot-discord/bots/guardian';
 const DJ = path.join(GUARD, 'node_modules/discord.js');
-const { Collection, PermissionFlagsBits } = require(DJ);
+const { Collection, PermissionFlagsBits, MessageFlags } = require(DJ);
 
 // ticket.js đọc process.env LÚC NẠP MODULE (không qua ctx.env) → phải set trước require.
 process.env.TICKET_CHANNEL_ID = '1554748500045070419';
@@ -321,7 +321,8 @@ const ev = (mod, name) => mod.events.find((e) => e.name === name).handler;
 
   t = sub('tag', 'list');
   check('/tag list -> true', (await tags.handleInteraction(t.i, ctxBase)) === true);
-  check('list ephemeral', t.captured?.ephemeral === true);
+  // discord.js 14.27 đã bỏ key `ephemeral` (deprecated) → phải dùng flags bitmask.
+  check('list ephemeral (flags bitmask)', t.captured?.flags === MessageFlags.Ephemeral, JSON.stringify(t.captured?.flags));
   check('đếm đúng 3 tag', (emb(t.captured).title || '').includes('(3)'), emb(t.captured).title);
 
   t = sub('tag', 'show', { name: 'welcome' });

@@ -3,7 +3,7 @@
 // Module lỗi bị bỏ qua (isolation) — không kéo sập cả bot.
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, Partials, Events, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events, REST, Routes, MessageFlags } = require('discord.js');
 const configStore = require('./config');
 
 const {
@@ -102,7 +102,7 @@ client.on(Events.InteractionCreate, (interaction) => {
         console.error(`Lỗi module ${m.name} interaction:`, err);
         try {
           if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Có lỗi khi xử lý.', ephemeral: true });
+            await interaction.reply({ content: '❌ Có lỗi khi xử lý.', flags: MessageFlags.Ephemeral });
           }
         } catch {
           /* đã reply rồi — bỏ qua */

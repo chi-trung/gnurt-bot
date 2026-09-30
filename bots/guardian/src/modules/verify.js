@@ -9,6 +9,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
 
@@ -81,12 +82,12 @@ async function handleInteraction(interaction, ctx) {
 
   const member = interaction.member;
   if (!member || !member.roles) {
-    await interaction.reply({ content: 'Không tìm thấy thành viên của bạn.', ephemeral: true });
+    await interaction.reply({ content: 'Không tìm thấy thành viên của bạn.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
   if (member.roles.cache.has(roleId)) {
-    await interaction.reply({ content: 'Bạn đã xác nhận rồi ✅', ephemeral: true });
+    await interaction.reply({ content: 'Bạn đã xác nhận rồi ✅', flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -95,7 +96,7 @@ async function handleInteraction(interaction, ctx) {
     if (pendingId && member.roles.cache.has(pendingId)) {
       await member.roles.remove(pendingId);
     }
-    await interaction.reply({ content: '✅ Xác nhận thành công — chúc bạn vui vẻ trong server!', ephemeral: true });
+    await interaction.reply({ content: '✅ Xác nhận thành công — chúc bạn vui vẻ trong server!', flags: MessageFlags.Ephemeral });
     await sendLog(
       ctx,
       new EmbedBuilder()
@@ -106,7 +107,7 @@ async function handleInteraction(interaction, ctx) {
     );
   } catch (err) {
     console.error('Verify lỗi:', err.message);
-    await interaction.reply({ content: `❌ Không xác nhận được: ${err.message}`, ephemeral: true });
+    await interaction.reply({ content: `❌ Không xác nhận được: ${err.message}`, flags: MessageFlags.Ephemeral });
   }
   return true;
 }

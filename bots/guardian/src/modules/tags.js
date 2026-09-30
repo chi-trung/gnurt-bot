@@ -7,6 +7,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
+  MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
 
@@ -85,7 +86,7 @@ async function handleInteraction(interaction, ctx) {
           .setTitle(`📚 Tag (${names.length})`)
           .setDescription(names.length ? names.map((n) => `\`${n}\``).join(', ') : 'Chưa có tag nào.'),
       ],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return true;
   }
@@ -94,7 +95,7 @@ async function handleInteraction(interaction, ctx) {
     const name = interaction.options.getString('name').toLowerCase();
     const content = tags[name];
     if (!content) {
-      await interaction.reply({ content: `Không có tag \`${name}\`. Dùng \`/tag list\` để xem.`, ephemeral: true });
+      await interaction.reply({ content: `Không có tag \`${name}\`. Dùng \`/tag list\` để xem.`, flags: MessageFlags.Ephemeral });
       return true;
     }
     await interaction.reply({
@@ -107,7 +108,7 @@ async function handleInteraction(interaction, ctx) {
 
   // create / delete — cần Manage Server
   if (!canManage(interaction)) {
-    await interaction.reply({ content: 'Bạn cần quyền **Manage Server** để dùng lệnh này.', ephemeral: true });
+    await interaction.reply({ content: 'Bạn cần quyền **Manage Server** để dùng lệnh này.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -121,22 +122,22 @@ async function handleInteraction(interaction, ctx) {
     if (!NAME_RE.test(name)) {
       await interaction.reply({
         content: 'Tên tag chỉ được dùng a-z, 0-9, `-`, tối đa 50 ký tự.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return true;
     }
     const content = interaction.options.getString('content');
     if (content.length > 2000) {
-      await interaction.reply({ content: 'Nội dung tối đa 2000 ký tự.', ephemeral: true });
+      await interaction.reply({ content: 'Nội dung tối đa 2000 ký tự.', flags: MessageFlags.Ephemeral });
       return true;
     }
     if (tags[name]) {
-      await interaction.reply({ content: `Tag \`${name}\` đã tồn tại — dùng \`/tag delete\` trước nếu muốn thay.`, ephemeral: true });
+      await interaction.reply({ content: `Tag \`${name}\` đã tồn tại — dùng \`/tag delete\` trước nếu muốn thay.`, flags: MessageFlags.Ephemeral });
       return true;
     }
     tags[name] = content;
     saveTags(tags);
-    await interaction.reply({ content: `✅ Đã tạo tag \`${name}\`.`, ephemeral: true });
+    await interaction.reply({ content: `✅ Đã tạo tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
     await sendLog(
       ctx,
       new EmbedBuilder()
@@ -150,12 +151,12 @@ async function handleInteraction(interaction, ctx) {
 
   if (sub === 'delete') {
     if (!tags[name]) {
-      await interaction.reply({ content: `Không có tag \`${name}\`.`, ephemeral: true });
+      await interaction.reply({ content: `Không có tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
       return true;
     }
     delete tags[name];
     saveTags(tags);
-    await interaction.reply({ content: `🗑️ Đã xóa tag \`${name}\`.`, ephemeral: true });
+    await interaction.reply({ content: `🗑️ Đã xóa tag \`${name}\`.`, flags: MessageFlags.Ephemeral });
     await sendLog(
       ctx,
       new EmbedBuilder()

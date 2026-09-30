@@ -11,6 +11,7 @@ const {
   EmbedBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
 
@@ -117,18 +118,18 @@ async function createSuggestion(interaction, ctx) {
   if (!channelId) {
     await interaction.reply({
       content: '⚠️ Chưa cấu hình `SUGGESTIONS_CHANNEL_ID` — module chưa hoạt động.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return true;
   }
 
   const content = interaction.options.getString('content').trim();
   if (!content) {
-    await interaction.reply({ content: 'Nội dung rỗng.', ephemeral: true });
+    await interaction.reply({ content: 'Nội dung rỗng.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const channel = await ctx.client.channels.fetch(channelId);
   const item = {
@@ -193,14 +194,14 @@ async function listSuggestions(interaction) {
             : 'Chưa có gợi ý nào đang mở.'
         ),
     ],
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
   return true;
 }
 
 async function decideSuggestion(interaction, ctx) {
   if (!isStaff(interaction, ctx)) {
-    await interaction.reply({ content: 'Chỉ staff mới quyết định được gợi ý.', ephemeral: true });
+    await interaction.reply({ content: 'Chỉ staff mới quyết định được gợi ý.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -208,7 +209,7 @@ async function decideSuggestion(interaction, ctx) {
   if (!messageId) {
     await interaction.reply({
       content: 'Link không hợp lệ — cần dạng `https://discord.com/channels/.../<id>`.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return true;
   }
@@ -216,7 +217,7 @@ async function decideSuggestion(interaction, ctx) {
   const all = loadSuggestions();
   const item = all[messageId];
   if (!item) {
-    await interaction.reply({ content: 'Không tìm thấy gợi ý này trong database.', ephemeral: true });
+    await interaction.reply({ content: 'Không tìm thấy gợi ý này trong database.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -236,7 +237,7 @@ async function decideSuggestion(interaction, ctx) {
 
   await interaction.reply({
     content: `✅ Đã chuyển gợi ý sang **${STATUS[next].label}**.`,
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 
   if (next !== 'open') {
@@ -262,7 +263,7 @@ async function handleVote(interaction, ctx) {
   if (!item) {
     await interaction.reply({
       content: 'Gợi ý này không còn trong database.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return true;
   }

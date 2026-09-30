@@ -7,6 +7,7 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
+  MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
 
@@ -62,7 +63,7 @@ async function handleInteraction(interaction, ctx) {
   const name = interaction.commandName;
   if (!['kick', 'ban', 'timeout', 'warn'].includes(name)) return false;
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const target = interaction.options.getMember('user') || interaction.options.getUser('user');
   const targetUser = target.user || target;

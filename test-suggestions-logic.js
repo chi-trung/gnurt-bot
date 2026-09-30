@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 
 const GUARD = 'C:/Users/Gnurt/Desktop/bot-discord/bots/guardian';
+const { MessageFlags } = require(path.join(GUARD, 'node_modules/discord.js'));
 const SUG = require(path.join(GUARD, 'src/modules/suggestions'));
 const SUG_FILE = path.join(GUARD, 'src/data/suggestions.json');
 
@@ -92,7 +93,8 @@ function sub(name, extraOpts = {}, over = {}) {
   fs.writeFileSync(SUG_FILE, JSON.stringify({}));
   let t = sub('list');
   check('trả về true', (await SUG.handleInteraction(t.i, ctx)) === true);
-  check('reply ephemeral', t.captured?.ephemeral === true);
+  // discord.js 14.27 đã bỏ key `ephemeral` (deprecated) → phải dùng flags bitmask.
+  check('reply ephemeral (flags bitmask)', t.captured?.flags === MessageFlags.Ephemeral, JSON.stringify(t.captured?.flags));
   const d0 = emb(t.captured).description ?? '';
   check('báo chưa có gợi ý', d0.includes('Chưa có gợi ý nào'), d0);
 

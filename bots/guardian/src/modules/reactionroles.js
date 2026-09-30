@@ -2,7 +2,7 @@
 // Lưu ở src/data/rr.json — bot restart vẫn nhớ panel.
 const fs = require('fs');
 const path = require('path');
-const { Events, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { Events, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, MessageFlags } = require('discord.js');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const RR_FILE = path.join(DATA_DIR, 'rr.json');
@@ -57,7 +57,7 @@ async function handleInteraction(interaction, ctx) {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'rr') return false;
 
   const sub = interaction.options.getSubcommand();
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   if (sub === 'create') {
     const channel = interaction.options.getChannel('channel');

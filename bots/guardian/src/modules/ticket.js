@@ -7,6 +7,7 @@ const {
   PermissionFlagsBits,
   EmbedBuilder,
   SlashCommandBuilder,
+  MessageFlags,
 } = require('discord.js');
 const { sendLog } = require('../core/log');
 
@@ -69,7 +70,7 @@ async function ensurePanel(client, channelId) {
 }
 
 async function createTicket(interaction, ctx) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const guild = interaction.guild;
   const overwrites = [
@@ -117,7 +118,7 @@ async function createTicket(interaction, ctx) {
 async function closeTicket(interaction, ctx) {
   const channel = interaction.channel;
   if (!channel || !channel.isTextBased?.()) {
-    await interaction.reply({ content: 'Chỉ dùng trong kênh ticket.', ephemeral: true });
+    await interaction.reply({ content: 'Chỉ dùng trong kênh ticket.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -132,12 +133,12 @@ async function closeTicket(interaction, ctx) {
   if (!isOwner && !isStaff) {
     await interaction.reply({
       content: 'Chỉ người mở ticket hoặc admin mới đóng được.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  await interaction.reply({ content: '🔒 Đang đóng ticket...', ephemeral: true });
+  await interaction.reply({ content: '🔒 Đang đóng ticket...', flags: MessageFlags.Ephemeral });
   const name = channel.name;
   await channel.delete('Ticket closed');
 
