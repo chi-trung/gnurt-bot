@@ -1,0 +1,36 @@
+# Secrets
+.env
+.env.local
+*.env
+!/.env.example
+!**/.env.example
+token.txt
+*.token.txt
+
+# Clone riêng của bên thứ ba (remote: github.com/SaseQ/discord-mcp)
+# -> quản lý bằng git repo riêng của nó, không đưa vào repo này.
+mcp-discord/
+
+# Script đổi tên channel 1 lần (đã chạy xong 30/09/2026)
+apply-renames.js
+fix-names.js
+create-gop-y.js
+rename-plan.json
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+vendor/
+
+# Logs & OS
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

@@ -1,0 +1,21 @@
+{
+  "modules": {
+    "welcome": true,
+    "verify": true,
+    "ticket": true,
+    "logging": true,
+    "automod": true,
+    "moderation": true,
+    "reactionroles": true,
+    "tags": true,
+    "starboard": true,
+    "suggestions": true
+  },
+  "automod": {
+    "invites": true,
+    "badwords": ["fuck", "shit", "bitch"],
+    "spam": { "messages": 6, "windowMs": 5000, "timeoutSeconds": 300 },
+    "mentions": { "max": 6 }
+  },
+  "starboard": { "threshold": 3, "emoji": "⭐" }
+}

@@ -1,0 +1,205 @@
+[
+  {
+    "id": "1554748247149387776",
+    "type": "CATEGORY",
+    "oldName": "📌 THÔNG BÁO",
+    "newName": "┌ THÔNG BÁO",
+    "applied": true
+  },
+  {
+    "id": "1554748455753089094",
+    "type": "TEXT",
+    "oldName": "quy-tắc",
+    "newName": "├quy-tắc",
+    "applied": true
+  },
+  {
+    "id": "1554748458483712042",
+    "type": "TEXT",
+    "oldName": "thông-báo",
+    "newName": "├thông-báo",
+    "applied": true
+  },
+  {
+    "id": "1554748461461540896",
+    "type": "TEXT",
+    "oldName": "log-bot",
+    "newName": "└log-bot",
+    "applied": true
+  },
+  {
+    "id": "1554748327629819904",
+    "type": "CATEGORY",
+    "oldName": "👋 CHÀO MỪNG",
+    "newName": "┌ CHÀO MỪNG",
+    "applied": true
+  },
+  {
+    "id": "1554748465232351263",
+    "type": "TEXT",
+    "oldName": "chào-mới",
+    "newName": "├chào-mới",
+    "applied": true
+  },
+  {
+    "id": "1554748469615530044",
+    "type": "TEXT",
+    "oldName": "giới-thiệu",
+    "newName": "├giới-thiệu",
+    "applied": true
+  },
+  {
+    "id": "1554771434549678131",
+    "type": "TEXT",
+    "oldName": "xác-nhận (tạo mới 30/09/2026 — chưa từng đổi tên)",
+    "newName": "└xác-nhận",
+    "applied": true
+  },
+  {
+    "id": "1554748331614412880",
+    "type": "CATEGORY",
+    "oldName": "💬 CHUNG",
+    "newName": "┌ CHUNG",
+    "applied": true
+  },
+  {
+    "id": "1554748474124148756",
+    "type": "TEXT",
+    "oldName": "tán-gẫu",
+    "newName": "├tán-gẫu",
+    "applied": true
+  },
+  {
+    "id": "1554748477203026000",
+    "type": "TEXT",
+    "oldName": "meme-pic",
+    "newName": "├meme-pic",
+    "applied": true
+  },
+  {
+    "id": "1554748480176783372",
+    "type": "TEXT",
+    "oldName": "âm-nhạc",
+    "newName": "├âm-nhạc",
+    "applied": true
+  },
+  {
+    "id": "1554777506169491527",
+    "type": "TEXT",
+    "oldName": "starboard (tạo mới 30/09/2026)",
+    "newName": "├starboard",
+    "applied": true
+  },
+  {
+    "id": "1554748334386712596",
+    "type": "CATEGORY",
+    "oldName": "🤖 BOT ZONE",
+    "newName": "┌ BOT ZONE",
+    "applied": true
+  },
+  {
+    "id": "1554748483506929766",
+    "type": "TEXT",
+    "oldName": "lệnh",
+    "newName": "├lệnh",
+    "applied": true
+  },
+  {
+    "id": "1554748486719635559",
+    "type": "TEXT",
+    "oldName": "time-capsule",
+    "newName": "├time-capsule",
+    "applied": true
+  },
+  {
+    "id": "1554748490062635068",
+    "type": "TEXT",
+    "oldName": "uống-nước",
+    "newName": "├uống-nước",
+    "applied": true
+  },
+  {
+    "id": "1554748493476929606",
+    "type": "TEXT",
+    "oldName": "tâm-trạng",
+    "newName": "├tâm-trạng",
+    "applied": true
+  },
+  {
+    "id": "1554748497020977254",
+    "type": "TEXT",
+    "oldName": "thử-thách",
+    "newName": "└thử-thách",
+    "applied": true
+  },
+  {
+    "id": "1554748338262384720",
+    "type": "CATEGORY",
+    "oldName": "🎫 HỖ TRỢ",
+    "newName": "┌ HỖ TRỢ",
+    "applied": true
+  },
+  {
+    "id": "1554748500045070419",
+    "type": "TEXT",
+    "oldName": "tạo-ticket",
+    "newName": "└tạo-ticket",
+    "applied": true
+  },
+  {
+    "id": "1554748341420822538",
+    "type": "CATEGORY",
+    "oldName": "🎮 GIẢI TRÍ",
+    "newName": "┌ GIẢI TRÍ",
+    "applied": true
+  },
+  {
+    "id": "1554748503194996776",
+    "type": "TEXT",
+    "oldName": "game-chat",
+    "newName": "├game-chat",
+    "applied": true
+  },
+  {
+    "id": "1554748506231668747",
+    "type": "TEXT",
+    "oldName": "thảo-luận",
+    "newName": "└thảo-luận",
+    "applied": true
+  },
+  {
+    "id": "1554748343895199754",
+    "type": "CATEGORY",
+    "oldName": "🔊 VOICE",
+    "newName": "┌ VOICE",
+    "applied": true
+  },
+  {
+    "id": "1554748509540843623",
+    "type": "VOICE",
+    "oldName": "Chill Zone",
+    "newName": "├ Chill Zone",
+    "applied": true
+  },
+  {
+    "id": "1554748514461024341",
+    "type": "VOICE",
+    "oldName": "Game Night",
+    "newName": "├ Game Night",
+    "applied": true
+  },
+  {
+    "id": "1554748519397466192",
+    "type": "VOICE",
+    "oldName": "Học Nhóm",
+    "newName": "└ Học Nhóm",
+    "applied": true
+  },
+  {
+    "id": "1554782911142694934",
+    "type": "TEXT",
+    "oldName": "└góp-ý (tạo mới 30/09/2026)",
+    "newName": "└góp-ý",
+    "applied": true
+  }
+]
